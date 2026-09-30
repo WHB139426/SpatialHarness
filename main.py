@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Reconstruct a video and explore its point cloud with Blender."""
 import argparse
+from datetime import datetime
 import math
 
 from pathlib import Path
@@ -43,12 +44,18 @@ Each key renders one PNG with first-person on the left and overhead on the right
 '''
 
 
+def create_session_dir(parent):
+    session_dir = parent / datetime.now().strftime('camera_%Y%m%d_%H%M%S_%f')
+    session_dir.mkdir(parents=True, exist_ok=False)
+    return session_dir
+
+
 def parse_args():
     worker = '--worker' in sys.argv
     argv = sys.argv[sys.argv.index('--worker') + 1:] if worker else sys.argv[1:]
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--blender', default=BLENDER)
-    parser.add_argument('--output-dir', default=OUTPUTDIR, help='Parent directory for reconstructions and camera sessions')
+    parser.add_argument('--output-dir', default=OUTPUTDIR, help='Parent directory for new camera sessions')
     parser.add_argument('--resolution', type=int, default=960)
     parser.add_argument('--samples', type=int, default=16)
     parser.add_argument('--up', nargs=3, type=float, default=None,
@@ -60,6 +67,7 @@ def parse_args():
     parser.add_argument('--device', default=DEVICE, help='Reconstruction inference device.')
     parser.add_argument('--metric-weights', default=METRIC_WEIGHTS, help='DA3 Metric checkpoint directory; use none to keep VGGT relative scale.')
     parser.add_argument('--point-radius', default=RADIUS, type=float, help='Point cloud radius in scene units; default: %(default)s')
+    parser.add_argument('--session-dir', help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     if args.resolution < 64 or args.samples < 1:
         parser.error('resolution must be >=64 and samples must be >=1')
@@ -77,7 +85,7 @@ def parse_args():
     return parser, args, worker
 
 
-def launch(args, source, cameras_path, parser):
+def launch(args, session_dir, source, cameras_path, parser):
     print(f'Reconstructing video: {args.video}', flush=True)
     reconstruction = [sys.executable, str(Path(__file__).resolve().parent / 'camera_control' / 'reconstruct.py'),
                       '--video', args.video, '--fps', str(args.fps),
@@ -95,7 +103,8 @@ def launch(args, source, cameras_path, parser):
     if not blender.is_file():
         parser.error(f'Blender not found: {blender}')
     command = [str(blender), '--background', '--factory-startup', '--python-exit-code', '1',
-               '--python', str(Path(__file__).resolve()), '--', '--worker', *sys.argv[1:]]
+               '--python', str(Path(__file__).resolve()), '--', '--worker',
+               '--session-dir', str(session_dir), *sys.argv[1:]]
     try:
         return subprocess.call(command)
     except KeyboardInterrupt:
@@ -105,18 +114,26 @@ def launch(args, source, cameras_path, parser):
 def main():
     parser, args, worker = parse_args()
     parent = Path(args.output_dir).expanduser().resolve()
-    folder = parent / 'reconstructions' / Path(args.video).stem
+    if worker:
+        if args.session_dir is None:
+            parser.error('Blender worker requires --session-dir')
+        session_dir = Path(args.session_dir).expanduser().resolve()
+        if not session_dir.is_dir():
+            parser.error(f'Session directory missing: {session_dir}')
+    else:
+        session_dir = create_session_dir(parent)
+    folder = session_dir / 'reconstruction'
     source = folder / 'vggt_reconstruction.ply'
     cameras_path = folder / 'vggt_cameras.json'
     if not worker:
-        return launch(args, source, cameras_path, parser)
+        return launch(args, session_dir, source, cameras_path, parser)
     if not source.is_file() or not cameras_path.is_file():
         parser.error(f'Reconstruction output missing: {source} or {cameras_path}')
 
     # Blender does not add the script directory to sys.path in background mode.
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from camera_control.session import run_session
-    return run_session(args, source, cameras_path, parent, HELP, UP,
+    return run_session(args, source, cameras_path, session_dir, HELP, UP,
                        MOVE_STEP, LOOK_STEP, POINT_STEP, EYE_HEIGHT)
 
 

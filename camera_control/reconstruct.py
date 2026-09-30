@@ -16,6 +16,7 @@ if __package__ in (None, ''):
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'models'))
 
 from main import (
+    create_session_dir,
     REC_WEIGHTS,
     DEVICE,
     FPS,
@@ -176,15 +177,20 @@ def main():
     parser.add_argument('--device', default=DEVICE)
     parser.add_argument('--metric-weights', default=METRIC_WEIGHTS,
                         help='DA3 Metric checkpoint directory; use none for VGGT relative scale')
-    parser.add_argument('--output-dir', default=OUTPUTDIR, help='Parent directory for reconstructions')
-    parser.add_argument('--output-ply', help='Output PLY; default: <output-dir>/reconstructions/<video name>/vggt_reconstruction.ply')
-    parser.add_argument('--output-cameras', help='Output camera JSON; default: <output-dir>/reconstructions/<video name>/vggt_cameras.json')
+    parser.add_argument('--output-dir', default=OUTPUTDIR, help='Parent directory for a new camera session')
+    parser.add_argument('--output-ply', help='Output PLY; default: <output-dir>/camera_<timestamp>/reconstruction/vggt_reconstruction.ply')
+    parser.add_argument('--output-cameras', help='Output camera JSON; default: alongside the PLY')
     args = parser.parse_args()
     if not math.isfinite(args.fps) or args.fps <= 0:
         parser.error('--fps must be finite and positive')
     if args.max_num_frames < 2:
         parser.error('--max-num-frames must be at least 2')
-    folder = Path(args.output_dir).expanduser().resolve() / 'reconstructions' / Path(args.video).stem
+    if args.output_ply:
+        folder = Path(args.output_ply).expanduser().resolve().parent
+    elif args.output_cameras:
+        folder = Path(args.output_cameras).expanduser().resolve().parent
+    else:
+        folder = create_session_dir(Path(args.output_dir).expanduser().resolve()) / 'reconstruction'
     args.output_ply = args.output_ply or str(folder / 'vggt_reconstruction.ply')
     args.output_cameras = args.output_cameras or str(folder / 'vggt_cameras.json')
     reconstruct(args)

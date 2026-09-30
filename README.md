@@ -25,7 +25,7 @@ tar -xf blender-4.5.13-linux-x64.tar.xz
 
 ## 从视频生成点云与相机参数
 
-`main.py` 顶部设置输入视频 `VIDEO`、抽帧速率 `FPS`、最多抽取的帧数 `MAX_NUM_FRAMES`、米制尺度采样帧数 `METRIC_FRAMES`、VGGT 权重 `REC_WEIGHTS` 和 DA3 Metric 权重目录 `METRIC_WEIGHTS`。每次运行都会从视频重建，再打开查看器；PLY 和相机 JSON 的路径在运行时由视频文件名生成。从首帧开始按 `FPS` 指定的时间间隔抽帧，到视频结束或达到 `MAX_NUM_FRAMES` 为止；例如 `FPS = 2.0` 表示每秒抽取约两帧。目标 FPS 不能高于视频原始帧率，且至少要能抽到两帧。之后使用 VGGT 推理、40% 深度置信度过滤和 0.01 体素下采样。相机条目保留内外参及原视频帧号。
+`main.py` 顶部设置输入视频 `VIDEO`、抽帧速率 `FPS`、最多抽取的帧数 `MAX_NUM_FRAMES`、米制尺度采样帧数 `METRIC_FRAMES`、VGGT 权重 `REC_WEIGHTS` 和 DA3 Metric 权重目录 `METRIC_WEIGHTS`。每次运行都会从视频重建，再打开查看器；运行时先创建带时间戳的相机会话目录，PLY、相机 JSON 和抽帧都保存在该会话的 `reconstruction/` 子目录中。从首帧开始按 `FPS` 指定的时间间隔抽帧，到视频结束或达到 `MAX_NUM_FRAMES` 为止；例如 `FPS = 2.0` 表示每秒抽取约两帧。目标 FPS 不能高于视频原始帧率，且至少要能抽到两帧。之后使用 VGGT 推理、40% 深度置信度过滤和 0.01 体素下采样。相机条目保留内外参及原视频帧号。
 
 在 `SpatialHarness` 目录执行重建并打开交互查看器：
 
@@ -39,11 +39,9 @@ python main.py
 python -m camera_control.reconstruct
 ```
 
-输出在 `OUTPUTDIR/reconstructions/<视频文件名>/`；例如 `VIDEO` 指向 `scene0651_02.mp4` 时，输出目录为 `outputs/reconstructions/scene0651_02/`。重建使用 `models/vggt_omega/` 和 `models/depth_anything_3/` 中的本地模型源码；模型权重路径由顶部的 `REC_WEIGHTS` 和 `METRIC_WEIGHTS` 指定。运行环境需要 PyTorch、OpenCV、Open3D 以及 DA3 的依赖。抽出的 JPG 保存在同一重建目录下的 `frames/`，相机 JSON 的 `image_path` 记录相对路径；重复运行会更新同名图片。可用 `--fps`、`--max-num-frames`、`--video`、`--checkpoint`、`--metric-weights` 覆盖重建配置。运行重建时使用启动脚本的 Python 环境。
+每次运行都新建 `OUTPUTDIR/camera_<时间戳>/`；其中 `reconstruction/vggt_reconstruction.ply`、`reconstruction/vggt_cameras.json` 和 `reconstruction/frames/` 保存本次重建结果，相机渲染 PNG 和状态 JSON 放在会话目录顶层。单独运行重建脚本也会新建相同结构的会话目录，但不会生成渲染图片。重建使用 `models/vggt_omega/` 和 `models/depth_anything_3/` 中的本地模型源码；模型权重路径由顶部的 `REC_WEIGHTS` 和 `METRIC_WEIGHTS` 指定。运行环境需要 PyTorch、OpenCV、Open3D 以及 DA3 的依赖。相机 JSON 的 `image_path` 指向同一 `reconstruction/` 目录下的 `frames/`；重复运行会新建会话，不覆盖之前的重建和图片。可用 `--fps`、`--max-num-frames`、`--video`、`--checkpoint`、`--metric-weights` 覆盖重建配置。运行重建时使用启动脚本的 Python 环境。
 
 默认运行时，DA3 Metric 从最多 `METRIC_FRAMES = 32` 个均匀选取的帧估计一个全场景尺度，再同时缩放 VGGT 深度与相机外参平移；PLY 和相机 JSON 因而使用近似米制尺度。终端同时打印各帧尺度的四分位距（IQR），用于观察估计是否稳定；JSON 中的 `metric_scale` 记录乘数。尺度估计失败会报错；如需保持原来的 VGGT 相对尺度，使用 `--metric-weights none`。启用 Metric 时，查看器的移动距离可近似按米理解；尺度精度仍取决于 DA3 预测。
-
-重复运行会更新该视频对应目录中的 PLY、JSON 和同名抽帧图片。
 
 ## 启动交互脚本
 
@@ -123,7 +121,7 @@ python main.py --up 0 -1 0
 
 ## 查看渲染结果
 
-在 `SpatialHarness` 目录启动时，每次都会在 `outputs/` 下新建一个 `camera_时间戳/` 目录。每次渲染打印完整 PNG 路径，历史图片不会被覆盖。
+在 `SpatialHarness` 目录启动时，每次都会在 `outputs/` 下新建一个 `camera_时间戳/` 目录。该目录同时包含 `reconstruction/` 和本次渲染的 PNG、状态 JSON；每次渲染打印完整 PNG 路径，历史会话不会被覆盖。
 
 - `0001_initial.png`、`0002_w.png` 等：渲染图片。
 - 同名 `.json`：生成该图片的命令和相机参数。

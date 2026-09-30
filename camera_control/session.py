@@ -2,7 +2,6 @@
 
 import contextlib
 import copy
-from datetime import datetime
 import json
 import os
 import sys
@@ -27,7 +26,7 @@ def render_log(path):
             os.close(backup)
 
 
-def run_session(args, source, cameras_path, parent, help_text, fallback_up,
+def run_session(args, source, cameras_path, output, help_text, fallback_up,
                 move_step, look_step, point_step, eye_height):
     import bpy
     from mathutils import Matrix, Vector
@@ -41,8 +40,6 @@ def run_session(args, source, cameras_path, parent, help_text, fallback_up,
     from camera_control.stitch import stitch_views
     from camera_control.view_label import ViewLabel
 
-    output = parent / datetime.now().strftime('camera_%Y%m%d_%H%M%S_%f')
-    output.mkdir(parents=True, exist_ok=False)
     log_path = output / 'render.log'
     print(f'Loading PLY: {source}\nSession: {output}', flush=True)
     with render_log(log_path):
