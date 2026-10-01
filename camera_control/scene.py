@@ -62,9 +62,8 @@ def create_scene(source, args):
     bpy.ops.object.camera_add()
     camera = bpy.context.object
     camera.data.type = 'PERSP'
-    camera.data.lens = 12
-    camera.data.sensor_width = 48
     camera.data.sensor_fit = 'HORIZONTAL'
+    # run_session sets the first-person intrinsics from vggt_cameras.json.
     camera.data.clip_start = 0.001
     scene = bpy.context.scene
     scene.camera = camera

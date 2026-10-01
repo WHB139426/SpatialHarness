@@ -85,9 +85,11 @@ reset
 quit
 ```
 
-每次操作都会渲染第一人称和俯瞰视角，再左右拼接为一张 PNG：左侧标注 “FIRST PERSON”，是带准星的第一人称画面；右侧标注 “TOP DOWN”，是从场景上方向观察的正交俯瞰图。英文标签使用项目自带的 [DejaVu Sans 字体](assets/fonts/DejaVuSans-Bold.ttf)（[许可证](assets/fonts/LICENSE.txt)），不依赖系统字体路径。俯瞰图中的橙色圆点标示当前相机在地图上的投影位置，蓝色箭头表示水平朝向。所有按键控制同一台第一人称相机，两侧画面同步更新。俯瞰图只显示水平朝向；`i/k` 改变的俯仰角可从左侧画面看到。
+每次操作都会渲染第一人称和俯瞰视角，并把匹配的原视频帧拼成一张三栏 PNG：左侧 “FIRST PERSON” 是带准星的第一人称画面；中间 “TOP DOWN” 是正交俯瞰图；右侧 “NEAREST VIDEO FRAME” 是位置和朝向最接近的原视频抽帧，保持原始宽高比并留黑边，不裁切。英文标签使用项目自带的 [DejaVu Sans 字体](assets/fonts/DejaVuSans-Bold.ttf)（[许可证](assets/fonts/LICENSE.txt)），不依赖系统字体路径。俯瞰图中的橙色圆点标示当前相机在地图上的投影位置，蓝色箭头表示水平朝向。所有按键控制同一台第一人称相机，左侧和中间画面同步更新，右侧根据当前相机姿态重新匹配。俯瞰图只显示水平朝向；`i/k` 改变的俯仰角可从左侧画面看到。
 
-`j/l` 围绕估计出的场景上方向转动，`i/k` 控制俯仰角，限制在 -89.9° 到 89.9°。第一人称镜头使用 12 mm 固定焦距的透视投影，不做碰撞检测；启用 Metric 时，输入的移动距离按米解释，其准确度取决于尺度估计。
+每次渲染后还会从本次重建的 `vggt_cameras.json` 中查找位置和镜头朝向最接近的原视频抽帧。终端打印该 JPG 路径、位置距离和朝向夹角；同名渲染 JSON 的 `nearest_frame` 字段也记录这些信息。匹配分数为 `(位置距离 / 0.5)^2 + (朝向夹角 / 20°)^2`；只比较位置与镜头朝向，不使用内参或画面内容。最近帧可能仍与当前视角相差很大，因此请同时查看距离和夹角。
+
+`j/l` 围绕估计出的场景上方向转动，`i/k` 控制俯仰角，限制在 -89.9° 到 89.9°。第一人称镜头根据本次 `vggt_cameras.json` 中各帧的归一化内参取中位数，设置固定的透视视野；这样最近原视频帧切换时不会突然变焦。第一人称图直接渲染为方形：保留原视频对应的水平视野和中央区域投影，向上下扩展可见范围，不拉伸画面。同名渲染 JSON 的 `intrinsics` 字段记录实际使用的像素内参。镜头不做碰撞检测；启用 Metric 时，输入的移动距离按米解释，其准确度取决于尺度估计。
 
 ## 点云大小
 
@@ -124,17 +126,17 @@ python main.py --up 0 -1 0
 在 `SpatialHarness` 目录启动时，每次都会在 `outputs/` 下新建一个 `camera_时间戳/` 目录。该目录同时包含 `reconstruction/` 和本次渲染的 PNG、状态 JSON；每次渲染打印完整 PNG 路径，历史会话不会被覆盖。
 
 - `0001_initial.png`、`0002_w.png` 等：渲染图片。
-- 同名 `.json`：生成该图片的命令和相机参数。
+- 同名 `.json`：生成该图片的命令、相机参数及最近原视频抽帧的路径和匹配误差。
 - `state.json`：最近一次成功渲染的第一人称相机位置与朝向；重新启动时仍从场景内的初始视点开始。
 - `render.log`：Blender 导入和渲染日志。
 
-拼接图的左侧中央显示小型白色十字准星（黑色描边），右侧显示相机的地图位置与水平朝向。中间的两张原始渲染图仅用于拼接，完成后会自动删除。
+拼接图的左侧中央显示小型白色十字准星（黑色描边），中间俯瞰图显示相机的地图位置与水平朝向。两张 Blender 临时渲染图仅用于拼接，完成后会自动删除；原视频抽帧仍保存在 `reconstruction/frames/`。
 
 在 VS Code Remote SSH 中打开对应 PNG 即可查看；普通 SSH 终端不会自动显示图片，也可以下载到本地查看。
 
 ## 渲染参数
 
-默认每个视角分辨率为 960×960，拼接后的 PNG 为 1920×960；每个视角的采样数为 16。快速预览示例：
+默认第一人称图和俯视图均直接渲染为 960×960。原视频帧保持原始宽高比，居中放入第三栏并可能留黑边；最终 PNG 为 2880×960；Blender 每个视角的采样数为 16。VGGT 内参来自预处理后的图像，是模型估计值，和原视频帧的像素对齐只可视为近似。快速预览示例：
 
 ```bash
 python main.py --resolution 480 --samples 4
@@ -151,7 +153,7 @@ This is a proposed interface for a future agent. The repository does not yet exp
 ```text
 You are a camera-navigation agent exploring a reconstructed 3D point-cloud scene. Use the camera tools to understand the scene layout and answer the user's spatial questions.
 
-Every camera-changing tool returns one combined image: FIRST PERSON on the left and TOP DOWN on the right. The left image shows the camera's view and a center crosshair. The right image shows the whole scene, an orange dot for the camera's projected position, and a cyan arrow for its horizontal heading. Both views reflect the same camera state.
+Every camera-changing tool returns one three-panel image: FIRST PERSON on the left, TOP DOWN in the middle, and NEAREST VIDEO FRAME on the right. The first-person image shows the camera's view and a center crosshair. The top-down image shows the scene, an orange dot for the camera's projected position, and a cyan arrow for its horizontal heading. The video panel shows the captured frame closest by camera position and viewing direction; it is a reference, not an exact view match. The render record includes its path, distance, and angle errors.
 
 Use the top-down view to plan movement and the first-person view to inspect objects and openings. Treat gaps and irregular surfaces in the point cloud as uncertain reconstruction, not automatically as free space. There is no collision detection. Use small movements near objects, inspect each returned image, and use status when the camera state is unclear.
 

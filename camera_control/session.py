@@ -34,8 +34,10 @@ def run_session(args, source, cameras_path, output, help_text, fallback_up,
     from camera_control.actions import parse_actions
     from camera_control.crosshair import create_crosshair
     from camera_control.estimate_up import estimate_scene_up
+    from camera_control.intrinsics import configure_first_person
     from camera_control.navigation import Navigator
     from camera_control.overhead import OverheadView
+    from camera_control.reference_frame import nearest_frame
     from camera_control.scene import create_scene
     from camera_control.stitch import stitch_views
     from camera_control.view_label import ViewLabel
@@ -60,6 +62,8 @@ def run_session(args, source, cameras_path, output, help_text, fallback_up,
     up = Vector(args.up if args.up is not None else estimated_up).normalized()
     print('Scene up:', list(up), f'({up_source})', flush=True)
     cameras = json.loads(cameras_path.read_text(encoding='utf-8'))
+    intrinsics = configure_first_person(camera, cameras, cameras_path, args.resolution)
+    print('First-person intrinsics:', json.dumps(intrinsics), flush=True)
     first_pose = Matrix(cameras[0]['extrinsic']).inverted()
     position = first_pose.translation.copy()
     direction = first_pose.to_3x3() @ Vector((0, 0, 1))
@@ -73,7 +77,6 @@ def run_session(args, source, cameras_path, output, help_text, fallback_up,
     state = copy.deepcopy(navigator.initial)
     overhead = OverheadView(scene, corners, center, up)
     crosshair = create_crosshair(camera, scene)
-    first_label = ViewLabel(camera, scene, 'FIRST PERSON')
     overhead_label = ViewLabel(overhead.camera, scene, 'TOP DOWN')
     index = 0
 
@@ -83,6 +86,8 @@ def run_session(args, source, cameras_path, output, help_text, fallback_up,
 
     def select_view(mode):
         if mode == 'overhead':
+            scene.render.resolution_y = args.resolution
+            scene.render.pixel_aspect_y = 1.0
             forward = camera.rotation_euler.to_matrix() @ Vector((0, 0, -1))
             overhead.update(camera.location.copy(), forward)
             overhead_label.update(overhead.camera.data.ortho_scale, .05)
@@ -90,29 +95,28 @@ def run_session(args, source, cameras_path, output, help_text, fallback_up,
             show_marker(overhead.marker, True)
             show_marker(crosshair, False)
             show_marker(overhead_label.root, True)
-            show_marker(first_label.root, False)
         else:
+            scene.render.resolution_y = intrinsics['height']
+            scene.render.pixel_aspect_y = intrinsics['pixel_aspect_y']
             scene.camera = camera
             show_marker(overhead.marker, False)
             show_marker(crosshair, True)
-            first_label.update(camera.data.sensor_width / camera.data.lens * .05, .05)
-            show_marker(first_label.root, True)
             show_marker(overhead_label.root, False)
 
     show_marker(crosshair, False)
-    show_marker(first_label.root, False)
     show_marker(overhead_label.root, False)
 
     def render(candidate, command):
         nonlocal index
         navigator.apply(candidate)
         forward = camera.rotation_euler.to_matrix() @ Vector((0, 0, -1))
+        match = nearest_frame(cameras, cameras_path, camera.location, forward)
         next_index = index + 1
         action_name = {'+': 'pointsize_plus', '-': 'pointsize_minus'}.get(command, command)
         image_path = output / f'{next_index:04d}_{action_name}.png'
         first_path = output / f'.{next_index:04d}_first.png'
         overhead_path = output / f'.{next_index:04d}_overhead.png'
-        print('Rendering first-person and overhead...', flush=True)
+        print('Rendering first-person, overhead, and nearest video frame...', flush=True)
         try:
             with render_log(log_path):
                 for mode, path in (('first_person', first_path), ('overhead', overhead_path)):
@@ -120,7 +124,7 @@ def run_session(args, source, cameras_path, output, help_text, fallback_up,
                     bpy.context.view_layer.update()
                     scene.render.filepath = str(path)
                     bpy.ops.render.render(write_still=True)
-                stitch_views(first_path, overhead_path, image_path)
+                stitch_views(first_path, overhead_path, match['image_path'], image_path)
         except Exception:
             navigator.apply(state)
             raise
@@ -128,16 +132,21 @@ def run_session(args, source, cameras_path, output, help_text, fallback_up,
             select_view('first_person')
             first_path.unlink(missing_ok=True)
             overhead_path.unlink(missing_ok=True)
-        record = {'command': command, 'views': ['first_person', 'overhead'],
-                  'layout': 'side_by_side', 'state': candidate,
+        record = {'command': command, 'views': ['first_person', 'overhead', 'nearest_video_frame'],
+                  'layout': 'three_columns', 'state': candidate,
                   'camera_position': list(camera.location), 'camera_forward': list(forward),
-                  'lens_mm': camera.data.lens,
+                  'lens_mm': camera.data.lens, 'intrinsics': intrinsics,
+                  'nearest_frame': match,
                   'image': str(image_path), 'input': str(source)}
         serialized = json.dumps(record, indent=2)
         image_path.with_suffix('.json').write_text(serialized, encoding='utf-8')
         (output / 'state.json').write_text(serialized, encoding='utf-8')
         index = next_index
         print(f'PNG: {image_path}', flush=True)
+        print(f'Nearest video frame: {match["image_path"]} '
+              f'(frame {match["video_frame_index"]}, '
+              f'{match["position_distance"]:.3f} scene units, '
+              f'{match["direction_angle_degrees"]:.1f} degrees)', flush=True)
         print('Camera:', json.dumps(candidate), flush=True)
 
     print(help_text, flush=True)

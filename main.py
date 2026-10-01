@@ -8,14 +8,14 @@ from pathlib import Path
 import subprocess
 import sys
 
-DEVICE = 'cuda:0'
+DEVICE = 'cuda:1'
 BLENDER = '/data4/haibo/software/blender/blender-4.5.13-linux-x64/blender'
 VIDEO = '/data4/haibo/data/VSI-Bench/scannet/scene0246_00.mp4'
 REC_WEIGHTS = '/data4/haibo/weights/VGGT-Omega/vggt_omega_1b_512.pt'
 METRIC_WEIGHTS = '/data4/haibo/weights/DA3METRIC-LARGE'
 OUTPUTDIR = 'outputs'
 FPS = 2.0  # 每秒从视频中抽取的帧数
-MAX_NUM_FRAMES = 300  # 最多用于重建的帧数
+MAX_NUM_FRAMES = 500  # 最多用于重建的帧数
 METRIC_FRAMES = 32  # 均匀选取多少帧用于估计米制尺度
 UP = [0.0, -1.0, 0.0]  # 相机参考方向；估计失败时的回退值
 EYE_HEIGHT = 1.0  # 初始视点距估计地面的高度；米制重建中约为米
@@ -24,7 +24,7 @@ MOVE_STEP = 0.3  # 默认移动距离；启用 Metric 时近似为米
 LOOK_STEP = 15  # 每次 IJKL 转动的角度
 POINT_STEP = 0.005  # 每次 +/- 调整的点半径
 HELP = f'''
-Camera controls (one or more keys per line; both views render after each key):
+Camera controls (one or more keys per line; three-panel PNG after each key):
   w / s    Walk forward / backward horizontally; add meters, e.g. w0.5.
   a / d    Strafe left / right; add meters, e.g. a0.2.
   q / e    Descend / ascend along the scene up axis.
@@ -40,7 +40,7 @@ Point radius changes by {POINT_STEP:g} scene units per +/- key.
 Edit MOVE_STEP, LOOK_STEP, or POINT_STEP at the top to change these fixed amounts.
 Positive magnitudes can follow each WASD/IJKL key: w0.5a0.2j30.
 Keys run left to right: wwww moves four default steps; waij still works.
-Each key renders one PNG with first-person on the left and overhead on the right, plus a JSON record.
+Each key saves one PNG: first-person, overhead, and nearest original video frame, plus a JSON record.
 '''
 
 
