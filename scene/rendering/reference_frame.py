@@ -9,12 +9,7 @@ DIRECTION_SCALE_DEGREES = 20.0
 
 def nearest_frame(cameras, cameras_path, position, forward):
     """Rank saved frames by camera-center distance and viewing-direction angle."""
-    if not cameras:
-        raise ValueError('Camera JSON contains no frames')
-
     forward_length = math.sqrt(sum(value * value for value in forward))
-    if not math.isfinite(forward_length) or forward_length <= 0:
-        raise ValueError('Current camera direction is invalid')
     forward = [value / forward_length for value in forward]
     best = None
 
@@ -43,6 +38,4 @@ def nearest_frame(cameras, cameras_path, position, forward):
                 'score': score,
             }
 
-    if not Path(best['image_path']).is_file():
-        raise FileNotFoundError(f"Matched video frame missing: {best['image_path']}")
     return best

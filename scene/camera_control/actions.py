@@ -1,6 +1,5 @@
 """Parse camera key sequences with optional per-key distances and angles."""
 
-import math
 import re
 
 
@@ -30,8 +29,6 @@ def parse_actions(command):
             if match:
                 label += match.group()
                 magnitude = float(match.group())
-                if not math.isfinite(magnitude) or magnitude <= 0:
-                    raise ValueError('Movement distance and look angle must be finite and positive')
                 index = match.end()
         actions.append((key, magnitude, label))
     return actions

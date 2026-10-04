@@ -1,7 +1,6 @@
-#!/usr/bin/env python3
 """Sample a video and reconstruct a colored PLY plus camera parameters."""
 
-import argparse
+from datetime import datetime
 import json
 import math
 import os
@@ -9,23 +8,13 @@ import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-# Support direct execution as well as python -m camera_control.reconstruct.
-if __package__ in (None, ''):
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-# Both model packages use absolute imports of their own top-level names.
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'models'))
+ROOT = Path(__file__).resolve().parents[2]
 
-from main import (
-    create_session_dir,
-    REC_WEIGHTS,
-    DEVICE,
-    FPS,
-    MAX_NUM_FRAMES,
-    METRIC_FRAMES,
-    METRIC_WEIGHTS,
-    VIDEO,
-    OUTPUTDIR,
-)
+
+def create_session_dir(parent):
+    session_dir = parent / datetime.now().strftime('camera_%Y%m%d_%H%M%S_%f')
+    session_dir.mkdir(parents=True)
+    return session_dir
 
 
 def sample_video(video_path, target_fps, max_num_frames, frames_dir):
@@ -65,36 +54,22 @@ def sample_video(video_path, target_fps, max_num_frames, frames_dir):
     return paths, indices, source_fps
 
 
-def reconstruct(args):
+def reconstruct(args, output_ply, output_cameras, metric_frames):
     import numpy as np
     import open3d as o3d
     import torch
 
-    video = Path(args.video).expanduser().resolve(strict=True)
-    checkpoint = Path(args.checkpoint).expanduser().resolve(strict=True)
+    video = Path(args.video).expanduser().resolve()
+    checkpoint = Path(args.checkpoint).expanduser().resolve()
     metric_weights = (None if args.metric_weights.lower() == 'none' else
-                      Path(args.metric_weights).expanduser().resolve(strict=True))
-    output_ply = Path(args.output_ply).expanduser().resolve()
-    output_cameras = Path(args.output_cameras).expanduser().resolve()
-    if metric_weights is not None and not (metric_weights / 'config.json').is_file():
-        raise ValueError(f'DA3 Metric checkpoint directory is invalid: {metric_weights}')
-    if not video.is_file() or not checkpoint.is_file():
-        raise ValueError('Video and checkpoint must be files')
-    model_dir = Path(__file__).resolve().parent.parent / 'models'
-    if not (model_dir / 'vggt_omega').is_dir():
-        raise ValueError('Local models/vggt_omega package is missing')
-    if metric_weights is not None and not (model_dir / 'depth_anything_3').is_dir():
-        raise ValueError('Local models/depth_anything_3 package is missing')
-    if output_ply == output_cameras or output_ply.parent != output_cameras.parent:
-        raise ValueError('PLY and camera JSON must be distinct files in one directory')
-    if args.device.startswith('cuda') and not torch.cuda.is_available():
-        raise RuntimeError('CUDA is unavailable; choose an available device')
+                      Path(args.metric_weights).expanduser().resolve())
 
+    # Both model packages use absolute imports of their own top-level names.
+    sys.path.insert(0, str(ROOT / 'models'))
     from vggt_omega.models import VGGTOmega
     from vggt_omega.utils.load_fn import load_and_preprocess_images
     from vggt_omega.utils.pose_enc import pose_encoding_to_extri_intri
 
-    output_ply.parent.mkdir(parents=True, exist_ok=True)
     frames_dir = output_ply.parent / 'frames'
     frames_dir.mkdir(parents=True, exist_ok=True)
     with TemporaryDirectory(prefix='.reconstruction_work_', dir=output_ply.parent) as temp:
@@ -115,8 +90,8 @@ def reconstruct(args):
             scale = 1.0
             print('Metric scaling disabled; coordinates use VGGT relative units', flush=True)
         else:
-            from camera_control.metric_scale import estimate_metric_scale
-            scale = estimate_metric_scale(predictions, metric_weights, args.device, METRIC_FRAMES)
+            from scene.reconstruction.metric_scale import estimate_metric_scale
+            scale = estimate_metric_scale(predictions, metric_weights, args.device, metric_frames)
 
         images = predictions['images']
         _, sequence, _, height, width = images.shape
@@ -166,35 +141,3 @@ def reconstruct(args):
         print(f'PLY: {output_ply} ({len(point_cloud.points):,} points)', flush=True)
         print(f'Cameras: {output_cameras} ({len(camera_data)} frames)', flush=True)
         print(f'Sampled frames: {frames_dir} ({len(frame_paths)} JPGs)', flush=True)
-
-
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--video', default=VIDEO)
-    parser.add_argument('--fps', type=float, default=FPS)
-    parser.add_argument('--max-num-frames', type=int, default=MAX_NUM_FRAMES)
-    parser.add_argument('--checkpoint', default=REC_WEIGHTS)
-    parser.add_argument('--device', default=DEVICE)
-    parser.add_argument('--metric-weights', default=METRIC_WEIGHTS,
-                        help='DA3 Metric checkpoint directory; use none for VGGT relative scale')
-    parser.add_argument('--output-dir', default=OUTPUTDIR, help='Parent directory for a new camera session')
-    parser.add_argument('--output-ply', help='Output PLY; default: <output-dir>/camera_<timestamp>/reconstruction/vggt_reconstruction.ply')
-    parser.add_argument('--output-cameras', help='Output camera JSON; default: alongside the PLY')
-    args = parser.parse_args()
-    if not math.isfinite(args.fps) or args.fps <= 0:
-        parser.error('--fps must be finite and positive')
-    if args.max_num_frames < 2:
-        parser.error('--max-num-frames must be at least 2')
-    if args.output_ply:
-        folder = Path(args.output_ply).expanduser().resolve().parent
-    elif args.output_cameras:
-        folder = Path(args.output_cameras).expanduser().resolve().parent
-    else:
-        folder = create_session_dir(Path(args.output_dir).expanduser().resolve()) / 'reconstruction'
-    args.output_ply = args.output_ply or str(folder / 'vggt_reconstruction.ply')
-    args.output_cameras = args.output_cameras or str(folder / 'vggt_cameras.json')
-    reconstruct(args)
-
-
-if __name__ == '__main__':
-    main()

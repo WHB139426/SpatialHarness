@@ -2,7 +2,35 @@
 
 在远程 Linux 服务器上，通过 Blender 后台渲染交互查看由视频重建的点云。使用 CPU 渲染，无需桌面环境；每次相机操作后生成 PNG。
 
-入口为 `main.py`；准星、俯瞰视角、上方向估计、视频重建和场景渲染模块放在 `camera_control/` 中。
+入口为 `main.py`，负责启动重建和 Blender、组装相机会话与渲染器，以及接收终端命令。底层模块统一放在 `scene/` 下，按职责分为重建、相机控制和渲染三个目录。
+
+## 代码结构
+
+```text
+main.py                  # 默认配置、启动流程、组装相机会话与终端交互
+scene/
+  reconstruction/
+    reconstruct.py       # 视频抽帧、VGGT 推理、保存点云和相机参数
+    metric_scale.py      # DA3 米制尺度估计
+  camera_control/
+    actions.py           # 解析相机命令
+    navigation.py        # 计算并应用相机位姿和点半径
+    session.py           # 相机状态、动作执行、重置与失败回滚
+  rendering/
+    renderer.py          # 场景初始化、三栏渲染与观察结果保存
+    scene.py             # 点云导入、材质、地面估计、内参和初始相机位姿
+    views.py             # 俯瞰视图、位置朝向标记、准星和文字标签
+    reference_frame.py   # 最近原视频帧匹配
+    stitch.py            # 三栏图片拼接
+models/                  # 本地模型源码
+assets/                  # 字体与标签图片
+```
+
+修改动作解析或移动方式看 `scene/camera_control/`，修改图片显示看 `scene/rendering/`，修改抽帧和重建看 `scene/reconstruction/`。调用关系为 `main.py` → `CameraSession` → `SceneRenderer`：相机会话执行动作并维护状态，渲染器根据当前位姿生成观察结果，终端交互调用会话方法。重建结果通过 PLY、相机 JSON 和抽帧文件传给查看器。
+
+`CameraSession` 提供 `observe()`、`execute(key, magnitude=None)`、`status()` 和 `reset()`。观察、动作和重置返回包含图片路径与相机状态的记录；状态查询只返回相机状态。动作成功生成观察结果后才提交状态，失败时恢复之前的相机位姿。
+
+默认配置在 `main.py` 顶部修改。初始相机位姿由场景初始化计算，并作为位置和方向传给 `CameraSession`；会话负责动作和状态，不计算地面或眼高。
 
 ## 安装 Blender
 
@@ -33,13 +61,7 @@ tar -xf blender-4.5.13-linux-x64.tar.xz
 python main.py
 ```
 
-只运行重建、暂不打开 Blender：
-
-```bash
-python -m camera_control.reconstruct
-```
-
-每次运行都新建 `OUTPUTDIR/camera_<时间戳>/`；其中 `reconstruction/vggt_reconstruction.ply`、`reconstruction/vggt_cameras.json` 和 `reconstruction/frames/` 保存本次重建结果，相机渲染 PNG 和状态 JSON 放在会话目录顶层。单独运行重建脚本也会新建相同结构的会话目录，但不会生成渲染图片。重建使用 `models/vggt_omega/` 和 `models/depth_anything_3/` 中的本地模型源码；模型权重路径由顶部的 `REC_WEIGHTS` 和 `METRIC_WEIGHTS` 指定。运行环境需要 PyTorch、OpenCV、Open3D 以及 DA3 的依赖。相机 JSON 的 `image_path` 指向同一 `reconstruction/` 目录下的 `frames/`；重复运行会新建会话，不覆盖之前的重建和图片。可用 `--fps`、`--max-num-frames`、`--video`、`--checkpoint`、`--metric-weights` 覆盖重建配置。运行重建时使用启动脚本的 Python 环境。
+每次运行都新建 `OUTPUTDIR/camera_<时间戳>/`；其中 `reconstruction/vggt_reconstruction.ply`、`reconstruction/vggt_cameras.json` 和 `reconstruction/frames/` 保存本次重建结果，相机渲染 PNG 和状态 JSON 放在会话目录顶层。重建使用 `models/vggt_omega/` 和 `models/depth_anything_3/` 中的本地模型源码；模型权重路径由配置中的 `REC_WEIGHTS` 和 `METRIC_WEIGHTS` 指定。运行环境需要 PyTorch、OpenCV、Open3D 以及 DA3 的依赖。相机 JSON 的 `image_path` 指向同一 `reconstruction/` 目录下的 `frames/`；重复运行会新建会话，不覆盖之前的重建和图片。可用 `--fps`、`--max-num-frames`、`--video`、`--checkpoint`、`--metric-weights` 覆盖重建配置。唯一启动入口为 `main.py`；它在子进程中调用重建函数，使用启动脚本的 Python 环境，重建进程结束后再启动 Blender。
 
 默认运行时，DA3 Metric 从最多 `METRIC_FRAMES = 32` 个均匀选取的帧估计一个全场景尺度，再同时缩放 VGGT 深度与相机外参平移；PLY 和相机 JSON 因而使用近似米制尺度。终端同时打印各帧尺度的四分位距（IQR），用于观察估计是否稳定；JSON 中的 `metric_scale` 记录乘数。尺度估计失败会报错；如需保持原来的 VGGT 相对尺度，使用 `--metric-weights none`。启用 Metric 时，查看器的移动距离可近似按米理解；尺度精度仍取决于 DA3 预测。
 
@@ -61,7 +83,7 @@ python main.py
 
 ## 第一人称相机操作
 
-在 `camera>` 后输入一个或连续多个按键并回车。按键从左到右依次执行，每个按键都生成一张 PNG；`reset`、`status`、`help` 和 `quit` 单独输入。相机像第一人称视角一样移动；不写数字时，`wasd` 的默认移动距离由 `main.py` 顶部的 `MOVE_STEP` 指定，`ijkl` 的默认转动角度由 `LOOK_STEP` 指定。也可以在每个按键后紧接一个正数，单独指定该步的幅度，例如 `w0.5` 或 `j30`，无需输入单位字符。`w0.5` 和 `MOVE_STEP` 使用同一个场景距离单位；默认启用 Metric 时约为米，使用 `--metric-weights none` 时是 VGGT 的相对单位。`ijkl` 的幅度单位是度；`q/e` 和点大小仍使用脚本顶部的固定步长。
+在 `camera>` 后输入一个或连续多个按键并回车。按键从左到右依次执行，每个按键都生成一张 PNG；`reset`、`status`、`help` 和 `quit` 单独输入。相机像第一人称视角一样移动；不写数字时，`wasd` 的默认移动距离由 `main.py` 顶部的 `MOVE_STEP` 指定，`ijkl` 的默认转动角度由 `LOOK_STEP` 指定。也可以在每个按键后紧接一个正数，单独指定该步的幅度，例如 `w0.5` 或 `j30`，无需输入单位字符。`w0.5` 和 `MOVE_STEP` 使用同一个场景距离单位；默认启用 Metric 时约为米，使用 `--metric-weights none` 时是 VGGT 的相对单位。`ijkl` 的幅度单位是度；`q/e` 和点大小仍使用 `main.py` 顶部的固定步长。
 
 | 按键 | 镜头动作 |
 | --- | --- |
@@ -105,7 +127,7 @@ python main.py --point-radius 0.003
 
 不传 `--up` 时，脚本使用本次重建的 PLY 和相机参数临时估计上方向，不额外保存方向配置。
 
-脚本用点云寻找地板候选平面，再利用相机位置和第一帧画面上方向判断地板正反面。启动时会打印最终 `Scene up` 和来源。如果没有可靠的地板，会退回第一帧相机的画面上方向；估计异常时会退回脚本顶部的 `UP = [0, -1, 0]`。回退值只是近似方向，不保证与地板垂直。
+脚本用点云寻找地板候选平面，再利用相机位置和第一帧画面上方向判断地板正反面。启动时会打印最终 `Scene up` 和来源。如果没有可靠的地板，会退回第一帧相机的画面上方向；地面估计发生异常时直接报错。第一帧相机方向只是近似方向，不保证与地板垂直。
 
 重新生成当前视频的 VGGT 重建：
 

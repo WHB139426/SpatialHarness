@@ -1,10 +1,10 @@
 """First-person camera orientation and horizontal walking controls."""
 
-import copy
 import math
 
 from mathutils import Matrix, Vector
 
+from .actions import MAGNITUDE_KEYS, SIMPLE_KEYS
 
 MOVEMENT = {'w': (0, 0, -1), 's': (0, 0, 1),
             'a': (-1, 0, 0), 'd': (1, 0, 0)}
@@ -52,9 +52,13 @@ class Navigator:
             self.extent * 20, (self.camera.location - self.center).length + self.extent * 2)
 
     def step(self, state, key, magnitude=None):
+        if key not in MAGNITUDE_KEYS | SIMPLE_KEYS:
+            raise ValueError(f'Unknown camera action: {key!r}')
+        if magnitude is not None and key not in MAGNITUDE_KEYS:
+            raise ValueError('Only movement and look keys accept a magnitude')
         if magnitude is not None and (not math.isfinite(magnitude) or magnitude <= 0):
             raise ValueError('Action magnitude must be finite and positive')
-        candidate = copy.deepcopy(state)
+        candidate = state.copy()
         if key in MOVEMENT:
             forward = self.forward(candidate)
             forward = (forward - self.up * forward.dot(self.up)).normalized()
@@ -71,8 +75,8 @@ class Navigator:
                 raise ValueError('Point size applies only to point clouds')
             direction = 1 if key == '+' else -1
             next_radius = round(candidate['point_radius'] + direction * self.point_step, 6)
-            if not 0 < next_radius <= self.extent:
-                raise ValueError('Point radius must stay positive and within the scene extent')
+            if next_radius <= 0:
+                raise ValueError('Point radius must stay positive')
             candidate['point_radius'] = next_radius
         else:
             turns = {'j': ('yaw', 1), 'l': ('yaw', -1),

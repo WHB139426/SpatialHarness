@@ -15,4 +15,3 @@ plyfile
 pycolmap
 trimesh
 evo
-open3d

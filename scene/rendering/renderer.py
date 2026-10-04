@@ -1,0 +1,136 @@
+"""Load a Blender scene and render three-panel observations."""
+
+import contextlib
+import copy
+import json
+import os
+from pathlib import Path
+import sys
+
+import bpy
+from mathutils import Vector
+
+from .reference_frame import nearest_frame
+from .scene import configure_first_person, create_scene, estimate_scene_up, initial_camera_pose
+from .stitch import stitch_views
+from .views import OverheadView, ViewLabel, create_crosshair
+
+
+@contextlib.contextmanager
+def render_log(path):
+    """Keep Python and native Blender progress in a log."""
+    sys.stdout.flush()
+    sys.stderr.flush()
+    saved = [os.dup(1), os.dup(2)]
+    try:
+        with open(path, 'a', buffering=1) as log:
+            os.dup2(log.fileno(), 1)
+            os.dup2(log.fileno(), 2)
+            yield
+    finally:
+        sys.stdout.flush()
+        sys.stderr.flush()
+        for descriptor, backup in zip((1, 2), saved):
+            os.dup2(backup, descriptor)
+            os.close(backup)
+
+
+class SceneRenderer:
+    """Own the scene, view overlays and output files."""
+
+    def __init__(self, args, source, cameras_path, output, *, eye_height):
+        self.args = args
+        self.source = Path(source)
+        self.cameras_path = Path(cameras_path)
+        self.output = Path(output)
+        self.log_path = self.output / 'render.log'
+        self.index = 0
+        print(f'Loading PLY: {self.source}\nSession: {self.output}', flush=True)
+        with render_log(self.log_path):
+            meshes, self.point_nodes, self.corners, self.center, self.extent, self.camera, self.scene = create_scene(self.source, args)
+        print(f'Geometry: {sum(len(obj.data.vertices) for obj in meshes):,} vertices, '
+              f'{sum(len(obj.data.polygons) for obj in meshes):,} faces; '
+              f'point-cloud objects: {len(self.point_nodes)}', flush=True)
+        self.cameras = json.loads(self.cameras_path.read_text(encoding='utf-8'))
+        estimated, self.up_source, floor_point = estimate_scene_up(meshes, self.cameras, self.extent)
+        floor_normal = Vector(estimated).normalized()
+        self.up = Vector(args.up if args.up is not None else estimated).normalized()
+        print('Scene up:', list(self.up), f'({self.up_source})', flush=True)
+        self.initial_pose = initial_camera_pose(
+            self.cameras[0]['extrinsic'], self.up, floor_normal, Vector(floor_point), eye_height,
+        )
+        print(f'Initial eye height: {eye_height:g} scene units above estimated floor', flush=True)
+        self.intrinsics = configure_first_person(self.camera, self.cameras, self.cameras_path, args.resolution)
+        print('First-person intrinsics:', json.dumps(self.intrinsics), flush=True)
+        self.setup_views()
+
+    def setup_views(self):
+        """Create the overhead view and overlays for the configured camera."""
+        self.overhead = OverheadView(self.scene, self.corners, self.center, self.up)
+        self.crosshair = create_crosshair(self.camera, self.scene)
+        self.overhead_label = ViewLabel(self.overhead.camera, self.scene, 'TOP DOWN')
+
+    @staticmethod
+    def _show(root, visible):
+        for obj in (root, *root.children_recursive):
+            obj.hide_render = not visible
+
+    def _forward(self):
+        return self.camera.rotation_euler.to_matrix() @ Vector((0, 0, -1))
+
+    def _select_view(self, mode):
+        overhead = mode == 'overhead'
+        if overhead:
+            self.scene.render.resolution_y = self.args.resolution
+            self.scene.render.pixel_aspect_y = 1.0
+            self.overhead.update(self.camera.location.copy(), self._forward())
+            self.overhead_label.update(self.overhead.camera.data.ortho_scale, .05)
+            self.scene.camera = self.overhead.camera
+        else:
+            self.scene.render.resolution_y = self.intrinsics['height']
+            self.scene.render.pixel_aspect_y = self.intrinsics['pixel_aspect_y']
+            self.scene.camera = self.camera
+        self._show(self.overhead.marker, overhead)
+        self._show(self.crosshair, not overhead)
+        self._show(self.overhead_label.root, overhead)
+
+    def render(self, state, command):
+        """Capture the current pose and return its saved observation record."""
+        forward = self._forward()
+        match = nearest_frame(self.cameras, self.cameras_path, self.camera.location, forward)
+        next_index = self.index + 1
+        action_name = {'+': 'pointsize_plus', '-': 'pointsize_minus'}.get(command, command)
+        image_path = self.output / f'{next_index:04d}_{action_name}.png'
+        first_path = self.output / f'.{next_index:04d}_first.png'
+        overhead_path = self.output / f'.{next_index:04d}_overhead.png'
+        print('Rendering first-person, overhead, and nearest video frame...', flush=True)
+        try:
+            with render_log(self.log_path):
+                for mode, path in (('first_person', first_path), ('overhead', overhead_path)):
+                    self._select_view(mode)
+                    bpy.context.view_layer.update()
+                    self.scene.render.filepath = str(path)
+                    bpy.ops.render.render(write_still=True)
+                stitch_views(first_path, overhead_path, match['image_path'], image_path)
+        finally:
+            self._select_view('first_person')
+            first_path.unlink(missing_ok=True)
+            overhead_path.unlink(missing_ok=True)
+        record = {
+            'command': command, 'views': ['first_person', 'overhead', 'nearest_video_frame'],
+            'layout': 'three_columns', 'state': copy.deepcopy(state),
+            'camera_position': list(self.camera.location), 'camera_forward': list(forward),
+            'lens_mm': self.camera.data.lens, 'intrinsics': self.intrinsics, 'nearest_frame': match,
+            'image': str(image_path), 'input': str(self.source),
+        }
+        serialized = json.dumps(record, indent=2)
+        image_path.with_suffix('.json').write_text(serialized, encoding='utf-8')
+        (self.output / 'state.json').write_text(serialized, encoding='utf-8')
+        self.index = next_index
+        print(f'PNG: {image_path}', flush=True)
+        print(f'Nearest video frame: {match["image_path"]} '
+              f'(frame {match["video_frame_index"]}, '
+              f'{match["position_distance"]:.3f} scene units, '
+              f'{match["direction_angle_degrees"]:.1f} degrees)', flush=True)
+        print('Camera:', json.dumps(state), flush=True)
+        return record
