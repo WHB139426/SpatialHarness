@@ -24,9 +24,11 @@ MAX_NUM_FRAMES = 500  # 最多用于重建的帧数
 METRIC_FRAMES = 32  # 均匀选取多少帧用于估计米制尺度
 EYE_HEIGHT = 1.0  # 初始视点距估计地面的高度；米制重建中约为米
 RADIUS = 0.015
+RESOLUTION = 960  # 第一人称图和俯视图的边长（像素）；参考帧保持原始尺寸
 MOVE_STEP = 0.3  # 默认移动距离；启用 Metric 时近似为米
 LOOK_STEP = 15  # 每次 IJKL 转动的角度
 POINT_STEP = 0.005  # 每次 +/- 调整的点半径
+CAMERA_TIMEOUT = 300  # 相机 worker 初始化或单次响应的等待秒数
 
 HELP = f'''
 Camera controls (one or more keys per line; three-panel PNG after each key):
@@ -42,10 +44,10 @@ Camera controls (one or more keys per line; three-panel PNG after each key):
   quit     Exit (also: exit).
 WASD defaults to {MOVE_STEP:g} meters; IJKL defaults to {LOOK_STEP:g} degrees.
 Point radius changes by {POINT_STEP:g} scene units per +/- key.
-Edit MOVE_STEP, LOOK_STEP, or POINT_STEP at the top of main.py to change these fixed amounts.
+Edit MOVE_STEP, LOOK_STEP, or POINT_STEP at the top of main_env.py to change these fixed amounts.
 Positive magnitudes can follow each WASD/IJKL key: w0.5a0.2j30.
 Keys run left to right: wwww moves four default steps; waij still works.
-Each key saves one PNG: first-person, overhead, and nearest original video frame, plus a JSON record.
+Each key saves a three-panel PNG preview, separate first-person and top-down PNGs, and a JSON record.
 '''
 
 
@@ -61,12 +63,14 @@ def parse_args():
     parser.add_argument('--metric-weights', default=METRIC_WEIGHTS, help='DA3 Metric checkpoint directory; use none to keep VGGT relative scale.')
     parser.add_argument('--output-dir', default=OUTPUTDIR, help='Parent directory for new camera sessions')
     parser.add_argument('--blender', default=BLENDER)
-    parser.add_argument('--resolution', type=int, default=960)
+    parser.add_argument('--resolution', type=int, default=RESOLUTION,
+                        help='First-person and top-down image size in pixels; default: %(default)s')
     parser.add_argument('--samples', type=int, default=16)
     parser.add_argument('--up', nargs=3, type=float, default=None,
                         metavar=('X', 'Y', 'Z'), help='Override the scene up vector; otherwise estimate from the PLY and camera JSON.')
     parser.add_argument('--point-radius', default=RADIUS, type=float, help='Point cloud radius in scene units; default: %(default)s')
     parser.add_argument('--session-dir', help=argparse.SUPPRESS)
+    parser.add_argument('--response-fd', type=int, help=argparse.SUPPRESS)
     return parser.parse_args(argv), worker
 
 
@@ -79,7 +83,7 @@ def launch(args, session_dir, source, cameras_path):
     if reconstruction.exitcode != 0:
         return reconstruction.exitcode
     command = [str(blender), '--background', '--factory-startup', '--python-exit-code', '1',
-               '--python', str(ROOT / 'main.py'), '--', '--worker',
+               '--python', str(ROOT / 'main_env.py'), '--', '--worker',
                '--session-dir', str(session_dir), *sys.argv[1:]]
     return subprocess.call(command)
 
@@ -141,6 +145,9 @@ def main():
         point_radius=args.point_radius, move_step=MOVE_STEP,
         look_step=LOOK_STEP, point_step=POINT_STEP,
     )
+    if args.response_fd is not None:
+        from scene.camera_control.bridge import serve_camera
+        return serve_camera(session, args.response_fd)
     return run_viewer(session, session_dir)
 
 

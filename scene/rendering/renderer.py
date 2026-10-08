@@ -1,4 +1,4 @@
-"""Load a Blender scene and render three-panel observations."""
+"""Render separate camera views and a three-panel preview."""
 
 import contextlib
 import copy
@@ -101,8 +101,11 @@ class SceneRenderer:
         next_index = self.index + 1
         action_name = {'+': 'pointsize_plus', '-': 'pointsize_minus'}.get(command, command)
         image_path = self.output / f'{next_index:04d}_{action_name}.png'
-        first_path = self.output / f'.{next_index:04d}_first.png'
-        overhead_path = self.output / f'.{next_index:04d}_overhead.png'
+        first_path = image_path.with_name(f'{image_path.stem}_first_person.png')
+        overhead_path = image_path.with_name(f'{image_path.stem}_top_down.png')
+        record_path = image_path.with_suffix('.json')
+        state_path = self.output / 'state.json'
+        temporary_state = state_path.with_suffix('.json.tmp')
         print('Rendering first-person, overhead, and nearest video frame...', flush=True)
         try:
             with render_log(self.log_path):
@@ -112,20 +115,25 @@ class SceneRenderer:
                     self.scene.render.filepath = str(path)
                     bpy.ops.render.render(write_still=True)
                 stitch_views(first_path, overhead_path, match['image_path'], image_path)
+            record = {
+                'command': command, 'views': ['first_person', 'overhead', 'nearest_video_frame'],
+                'layout': 'three_columns', 'state': copy.deepcopy(state),
+                'camera_position': list(self.camera.location), 'camera_forward': list(forward),
+                'lens_mm': self.camera.data.lens, 'intrinsics': self.intrinsics, 'nearest_frame': match,
+                'image': str(image_path), 'input': str(self.source),
+                'images': {'first_person': str(first_path), 'top_down': str(overhead_path),
+                           'nearest_video_frame': match['image_path']},
+            }
+            serialized = json.dumps(record, indent=2)
+            record_path.write_text(serialized, encoding='utf-8')
+            temporary_state.write_text(serialized, encoding='utf-8')
+            temporary_state.replace(state_path)
+        except BaseException:
+            for path in (first_path, overhead_path, image_path, record_path, temporary_state):
+                path.unlink(missing_ok=True)
+            raise
         finally:
             self._select_view('first_person')
-            first_path.unlink(missing_ok=True)
-            overhead_path.unlink(missing_ok=True)
-        record = {
-            'command': command, 'views': ['first_person', 'overhead', 'nearest_video_frame'],
-            'layout': 'three_columns', 'state': copy.deepcopy(state),
-            'camera_position': list(self.camera.location), 'camera_forward': list(forward),
-            'lens_mm': self.camera.data.lens, 'intrinsics': self.intrinsics, 'nearest_frame': match,
-            'image': str(image_path), 'input': str(self.source),
-        }
-        serialized = json.dumps(record, indent=2)
-        image_path.with_suffix('.json').write_text(serialized, encoding='utf-8')
-        (self.output / 'state.json').write_text(serialized, encoding='utf-8')
         self.index = next_index
         print(f'PNG: {image_path}', flush=True)
         print(f'Nearest video frame: {match["image_path"]} '
