@@ -75,6 +75,12 @@ class CameraClient:
     def reset(self):
         return self._request('reset')
 
+    def set_target(self, observation_id, point, look_at=None):
+        return self._request('set_target', observation_id=observation_id, point=point, look_at=look_at)
+
+    def set_route(self, observation_id, points):
+        return self._request('set_route', observation_id=observation_id, points=points)
+
     def _stop(self):
         try:
             self.process.stdin.close()
@@ -114,6 +120,8 @@ def serve_camera(session, response_fd):
         'execute': session.execute,
         'status': session.status,
         'reset': session.reset,
+        'set_target': session.set_target,
+        'set_route': session.set_route,
         'close': lambda: None,
     }
     with os.fdopen(response_fd, 'w', encoding='utf-8', buffering=1) as responses:

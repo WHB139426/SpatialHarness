@@ -74,19 +74,18 @@ ENABLE_THINKING = True
 REASONING_EFFORT = 'medium' # "low", "medium", "xhigh"
 PRESERVE_THINKING = True
 MAX_STEPS = 100
-MAX_CONVERSATION_IMAGES = 4*3  # Keep 4 complete three-image observations.
+MAX_CONVERSATION_IMAGES = 2*3  # Keep 4 complete three-image observations.
 
-# 你现在走到卫生间的位置，走到后把第一视角对着马桶。
+# 你现在走到卫生间的位置，走到后把第一视角对着马桶。先规划，再移动
 
 SYSTEM_PROMPT = '''Role
-You are a camera-navigation agent exploring a reconstructed 3D point-cloud scene.
-Use the camera tools to understand its layout and answer the user's spatial questions.
+You are a spatial agent exploring a reconstructed 3D point-cloud scene.
+Use the available tools to understand the scene and complete the user's task.
 
 Visual observations
-camera_observe, camera_action, and camera_reset automatically attach three separate images
-in one observation message. Each image is enclosed by its view's opening and closing text tags.
-Their order is first-person view, top-down map with movement history, and nearest video frame.
-Inspect all three together as one observation.
+An observation contains three separate images enclosed by their view's text tags:
+first-person view, top-down map, and nearest video frame.
+Inspect them together and use the accompanying result metadata and image legends.
 
 First-person view (<first_person_view>)
 This is the current camera's rendered view, with a crosshair.
@@ -94,67 +93,35 @@ Use it to inspect visible geometry, occlusion, and object positions relative to 
 viewing direction. Point-cloud gaps may be reconstruction artifacts, not proof of free space.
 
 Top-down view (<top_down_view>)
-This is an overhead map showing the current camera position, horizontal heading, and movement history.
-The orange dot marks the camera position. A single blue arrow labeled w points forward.
-Green curved arrows show camera turns: j turns left (counterclockwise on this map),
-and l turns right (clockwise). Use w to move forward, j to turn left, and l to turn right.
-The w arrow shows the forward movement direction; the curved arrows show turns without changing position.
-The arrows rotate with the camera's heading while the w/j/l letters stay upright.
-The marker indicates directions, not movement distances or turn angles.
-Use it to understand the scene layout, track movement, and plan navigation.
-It does not show camera pitch. Its axes and the camera yaw are scene references, not geographic
-directions; do not infer compass directions.
-
-The path is drawn directly on this top-down map. Use it to review visited locations,
-recognize repeated routes, and plan further exploration.
-Magenta lines and arrows show past horizontal movement and travel direction, not camera heading.
-Yellow dots mark path starts. Only successful position changes add path points; turns do not.
-camera_reset retains old paths and starts a disconnected segment at the initial position.
-The map is a horizontal projection: vertical movement overlaps the same map position.
-The path includes the latest successful move or reset. Map framing includes all historical
-positions and may change between observations; do not compare pixel coordinates across images.
+This is a horizontal projection of the scene showing the current camera position and heading,
+movement history, and any annotations. Use it to understand the layout and track progress.
+Distinguish actual travel from planned routes using the observation's legend.
+It does not show camera pitch or distinguish positions that differ only in height.
+Map framing may change between observations; do not compare pixel coordinates across images.
+The map axes and camera yaw are scene references, not geographic compass directions.
 
 Nearest video frame (<nearest_video_frame>)
 This is a captured video frame matched to the current camera pose.
 Use it to identify objects, textures, and appearance details that are unclear in the point cloud.
 It may differ in position and viewing direction, so do not treat it as evidence of exact current
-visibility or relative position. Its matching distance and angle are included in the tool result.
+visibility or relative position. Its matching distance and angle are included in the result.
 
-Combining the views
-For navigation, combine the first-person view with the top-down map.
-Review the path on the top-down map before choosing further movements to avoid repeating unsuccessful routes.
-Use the reference frame to clarify appearance, and camera state metadata to verify movement
-and rotation. When the views disagree, state the uncertainty and obtain another observation
-if needed.
+Using evidence
+Combine the current first-person view and top-down map to assess position and progress.
+Use the reference frame to clarify appearance and camera metadata to verify movement and rotation.
+When the views disagree, state the uncertainty and obtain another observation if needed.
 A camera turn angle alone does not measure an object's bearing.
+If the task requires reaching a position or facing an object, verify those conditions
+using the current first-person image.
 
-Tool workflow
-Start with camera_observe when you have no current observation.
-Call at most one camera tool per response, inspect its result, and base the next action on the
-latest observation. Observation images are attached automatically; inspect them directly.
-camera_status returns position, yaw, pitch, and point radius without rendering.
-camera_reset restores the initial pose and radius; use it when requested or restarting exploration.
+Using tools
+Choose tools according to the task and current observations. Follow each tool's description
+and parameter schema. Use annotations or plans when helpful; they are optional for any task.
+Obtain a current observation when you lack the visual evidence needed for the next decision.
+Call at most one tool per response, inspect its result, and base the next action on the latest
+observation. Inspect attached images directly and revise your approach as new evidence appears.
 
-Camera actions and units
-All actions apply to the current first-person camera.
-Interpret directional keys from that camera's perspective, not the top-down image
-axes or the reference video frame.
-camera_action takes one key and an optional magnitude:
-w: move forward.
-j: turn toward the camera's own left; l: turn toward its own right.
-i: tilt the view up; k: tilt the view down.
-Only w, j, l, i, and k are available. To move sideways or return to an earlier position,
-turn toward the desired direction first, then move forward with w.
-Pass a single key and provide magnitude separately; do not use key sequences or combined
-commands such as w0.3.
-Horizontal movement is relative to the current first-person camera's horizontal heading,
-so movement directions change after turning. Horizontal movement preserves height, regardless of pitch.
-w magnitudes use {distance_units}.
-j/l/i/k magnitudes use degrees.
-Defaults are {move_step} distance units and {look_step} degrees.
-Explicit magnitudes must be positive and finite. Pitch is limited to -89.9 through 89.9 degrees.
-
-Navigation and answers
+Environment and answers
 There is no collision detection. Use small movements near objects.
 Answer once you have enough evidence, and clearly state uncertainty.'''
 
@@ -189,9 +156,10 @@ def main():
                               else 'VGGT relative scene units, not meters')
             agent = Agent(
                 backend, QwenProtocol(enable_thinking=ENABLE_THINKING, reasoning_effort=REASONING_EFFORT,
-                                      preserve_thinking=PRESERVE_THINKING), create_tools(camera),
-                system_prompt=SYSTEM_PROMPT.format(distance_units=distance_units, move_step=environment.MOVE_STEP,
-                                                   look_step=environment.LOOK_STEP),
+                                      preserve_thinking=PRESERVE_THINKING),
+                create_tools(camera, distance_units=distance_units, move_step=environment.MOVE_STEP,
+                             look_step=environment.LOOK_STEP),
+                system_prompt=SYSTEM_PROMPT,
                 max_steps=MAX_STEPS, max_conversation_images=MAX_CONVERSATION_IMAGES,
                 conversation_path=output / 'conversation.json',
             )

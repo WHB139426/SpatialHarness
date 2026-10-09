@@ -45,6 +45,7 @@ class SceneRenderer:
         self.output = Path(output)
         self.log_path = self.output / 'render.log'
         self.index = 0
+        self.map_frame = None
         print(f'Loading PLY: {self.source}\nSession: {self.output}', flush=True)
         with render_log(self.log_path):
             meshes, self.point_nodes, self.corners, self.center, self.extent, self.camera, self.scene = create_scene(self.source, args)
@@ -94,10 +95,12 @@ class SceneRenderer:
         self._show(self.crosshair, not overhead)
         self._show(self.overhead_label.root, overhead)
         self.overhead.trajectory.hide_render = True
+        self._show(self.overhead.plan, False)
 
-    def render(self, state, command, segments):
+    def render(self, state, command, segments, planning=None):
         """Capture the current pose and return its saved observation record."""
         forward = self._forward()
+        planning = planning or {'target': None, 'look_at': None, 'route': []}
         match = nearest_frame(self.cameras, self.cameras_path, self.camera.location, forward)
         next_index = self.index + 1
         action_name = {'+': 'pointsize_plus', '-': 'pointsize_minus'}.get(command, command)
@@ -115,8 +118,11 @@ class SceneRenderer:
                 for mode, path in (('first_person', first_path), ('overhead', overhead_path)):
                     if mode == 'overhead':
                         positions = [position for segment in segments for position in segment]
+                        positions.extend(planning['route'])
+                        positions.extend(point for point in (planning['target'], planning['look_at']) if point is not None)
                         self._select_view('overhead', positions)
                         self.overhead.draw_trajectory(segments)
+                        self.overhead.draw_plan(planning)
                     else:
                         self._select_view(mode)
                     bpy.context.view_layer.update()
@@ -124,6 +130,7 @@ class SceneRenderer:
                     bpy.ops.render.render(write_still=True)
                 stitch_views(first_path, overhead_path, match['image_path'], image_path)
             record = {
+                'observation_id': next_index,
                 'command': command, 'views': ['first_person', 'top_down', 'nearest_video_frame'],
                 'layout': 'separate_images', 'state': copy.deepcopy(state),
                 'camera_position': list(self.camera.location), 'camera_forward': list(forward),
@@ -133,6 +140,7 @@ class SceneRenderer:
                            'nearest_video_frame': match['image_path']},
                 'trajectory': {'segment_count': len(segments),
                                'position_count': sum(len(segment) for segment in segments)},
+                'planning': self.overhead.project_plan(planning),
             }
             serialized = json.dumps(record, indent=2)
             record_path.write_text(serialized, encoding='utf-8')
@@ -145,6 +153,7 @@ class SceneRenderer:
         finally:
             self._select_view('first_person')
         self.index = next_index
+        self.map_frame = self.overhead.frame()
         print(f'PNG: {image_path}', flush=True)
         print(f'Nearest video frame: {match["image_path"]} '
               f'(frame {match["video_frame_index"]}, '

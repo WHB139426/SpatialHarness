@@ -425,8 +425,59 @@ Python AST 语法检查、纯英文检查、分段和四个格式占位符检查
 Python 语法、纯英文、米制/相对单位填充、五键/三图/单箭头说明以及新增约束移除检查通过，diff 检查通过。本轮未重跑模型或 Blender；重启 main_agent.py 后使用恢复后的提示词，既有会话的 system message 不会自动改变。
 
 
+## 32. 俯视图目标与路线工具
+
+用户授权增加两个仅作用于 top-down 的计划工具。`agent/tools.py` 新增 `camera_set_target(observation_id, point, look_at=None)` 与 `camera_set_route(observation_id, points)`；工具总数为六，动作仍仅 w/j/l/i/k。参数为最新观察的 observation_id 和归一化 [x, y] 坐标（左上 [0, 0]、右下 [1, 1]）。每个成功渲染的记录新增 observation_id 与当前地图坐标下的 planning。旧编号、未观察、非有限数、布尔值、越界坐标或错误结构均被拒绝。两个工具不移动相机、不修改实际轨迹，仍自动返回原来的三张独立观察图片和三栏预览；没有第四张图片，也没有新增通用工具。
+
+`CameraSession` 将目标、朝向点与有序路线保存在场景坐标中，经 CameraClient JSON 桥接调用，计划和状态一样在渲染、记录及 state.json 保存成功后才提交。渲染器保存最后一次成功地图的投影参数，保证失败渲染后仍可使用上一次成功的 observation_id。俯视图用红色 G 圆圈标记相机站立位置、红色 LOOK 和箭头表示应面向的位置；带编号的蓝点和蓝色虚线表示计划，原紫红轨迹表示实际运动。路线自动从调用时当前相机位置起始；途经点列表包含终点。地图取景包含历史与计划标记，缩放后重新投影。第一视角隐藏所有计划标记，参考帧不加标记。修改目标会清除旧路线，point=null 清除全部计划，points=[] 仅清除路线；移动、观察、转向和 reset 保留计划，reset 不移动旧路线的起点。工具不提供碰撞检查、自动寻路或执行路线。
+
+`main_agent.py` 添加简短英文 Navigation planning on the top-down map 段，说明先标目的地、画路线、检查返回地图再执行相机动作；工具描述和观察附件说明同为英文。README 同步六个工具、坐标、清除和保留行为。用户已有的 MAX_CONVERSATION_IMAGES=1*3、模型设置与中文任务注释均未改动。
+
+真实 Blender 子进程通信与脚本模型经 Qwen XML 协议检查通过：两个新工具的参数解析与三图附件、标记只改变俯视图、相机与实际轨迹不变、目的地坐标转换、移动/转向/reset 保留场景计划、远距离移动触发地图重取景后的重新投影、旧观察及无效坐标拒绝、计划绘制和 state.json 提交失败时的相机/轨迹/计划/文件回滚、替换/清除和 worker 正常退出。报告为 `outputs/planning_check_tc_po9bj/report.json`；临时脚本 `/tmp/spatialharness-planning-check.py` 和 `/tmp/spatialharness-planning-inject.py`。另复用当前实际场景已有重建，验证初始位置的马桶目标与三段路线显示；报告为 `outputs/planning_scene_check_fnm46nwd/report.json`，已查看 `.views/0003_set_route_top_down.png`，人工预览为 `0003_set_route.png`，临时脚本 `/tmp/spatialharness-planning-scene-check.py`。没有调用真实模型服务或 GPU 重建，也未评估新增标记对自主导航成功率的改善。AST、英文提示词/格式化和 diff 检查通过。
+
+
 ## 32. 给定路线的马桶任务 prompt
 
 用户希望将任务改为直接告诉模型从出发点到马桶的路线，以检查能否执行。`main_agent.py` 参数下的任务示例注释改为英文单行 prompt，适用于当前场景的新会话初始位置：先 camera_observe，再依次执行 w 1.0、l 21、w 1.83、j 8、w 0.42、l 92、k 15。明确 key 和 magnitude 分开传入，每次只调用一个动作，沿床左侧向床头前进后转向马桶，按给定序列执行，最终必须用当前第一视角确认马桶可见并正对它。通用 SYSTEM_PROMPT、工具和模型参数保持不变。注释不会自动进入模型请求，运行后需要将英文任务复制到 agent>。
 
 路线根据之前成功会话 `camera_20261008_193217_140353` 的相机位置推导，复用当前 `camera_20261008_222550_137283/reconstruction`，通过真实 Navigator 七次动作与 Blender 终点渲染验证。最终位置约 [0.74427, 0.27340, 3.14080]，yaw 344.956、pitch -15，第一视角清楚显示马桶；预览为 `outputs/guided_route_check_qg3tvkdu/0001_guided_route.png`，报告为同目录 `report.json`，临时脚本 `/tmp/spatialharness-guided-route-check.py`。没有逐步渲染中间观察，也未调用真实模型服务或 GPU 重建；验证证明当前无碰撞检测的相机环境能够到达该目标视角，不证明真实物理通道可通行或 Qwen 能遵循路线。Python AST 与 diff 检查通过。
+
+
+## 33. 目标与路线按任务自主选择
+
+用户要求目标/路线工具不限定于 navigation，也不强制先设置目标再规划路线。`main_agent.py` 的英文 SYSTEM_PROMPT 将该段改为 Optional targets and routes on the top-down map，允许根据任务和当前观察选择任一工具、两个工具或都不用。检查标记后仅在移动有助于任务时执行 camera_action；到位和朝向验证也仅用于任务有相应要求时。归一化坐标、观察编号、图例、标记持久化和清除行为沿用。没有改工具、模型参数或图片设置。AST、纯英文、格式占位符和 diff 检查通过；未重跑模型或 Blender，重启 main_agent.py 后使用新提示词。
+
+
+## 34. system prompt 与工具说明分工
+
+用户要求消除 system prompt 与工具 description 的重复，避免每次新增工具都修改 system prompt。`main_agent.py` 的英文 SYSTEM_PROMPT 现在仅包含角色、三视角用途、证据判断、按任务自主选择工具/可选计划、逐次检查结果及环境事实；不列工具名称、按键、参数、坐标、单位、默认值、图例或工具特定流程。不再执行 SYSTEM_PROMPT.format。移动和最终朝向仍根据当前视角证据确认，参考帧与当前视角的区别、点云缺口、地图取景变化和非地理轴说明保留。
+
+`agent/tools.py` 的 create_tools 增加可选 distance_units、move_step、look_step 关键字参数，入口传入当前环境配置，动态生成动作 schema 中的单位与默认步长；俯仰范围移入动作 description。沿用 create_tools(camera) 的兼容调用方式，未提供步长时只说明使用已配置步长。当前位置、w 朝向箭头和 j/l 弧线的图例移到观察消息，与原有实际轨迹和计划图例一起输出。具体相机动作仍由 schema 说明第一视角参照。工具实现、三图、模型参数与用户已有配置没有改变。README 同步分工及动态工具描述。
+
+AST、纯英文、无工具名称/格式占位符的通用 system prompt、米制与 VGGT 相对单位/自定义默认步长的 schema 生成、旧 create_tools 调用兼容、现有实际观察的三图与图例，以及 Qwen 请求构造检查通过，diff 检查通过。没有重跑模型导航、Blender 或重建；重启 main_agent.py 后生效。
+
+
+## 35. 工具 description 补充使用场景示例
+
+用户希望工具描述说明常见使用场景，但不限制用途。`agent/tools.py` 为六个工具各增加一句英文 Useful, for example：动作可用于接近位置、换视点查看或调方向；观察可用于初始查看或不移动地复查；状态查询可用于无图确认位姿/角度；reset 可用于返回初始视点或从初始位置开始新任务；目标可用于保留目的地、选观察位置或记住最终朝向；路线可用于安排探索、组织观察视点或比较路径。示例不构成强制调用规则或适用范围限制，system prompt 沿用通用工具选择原则。仅改说明文字，参数和执行行为不变。AST、英文 schema 生成与 diff 检查通过；未重跑模型或 Blender。
+
+
+## 36. camera_action 单步撤销
+
+用户授权通过现有动作参数增加 `camera_action(key="undo")`，不新增工具。`CameraSession` 只保存最近一次成功非 undo 动作前的完整状态，包含位置、yaw、pitch 与点半径；成功普通动作替换备份，成功 undo 或 reset 清空备份。观察、状态查询和目标/路线操作不覆盖备份，失败动作、undo 或 reset 也不覆盖/消费备份。所有状态更新和备份变化在图片与记录成功保存后提交。undo 不接受非空 magnitude，无可撤销状态时返回英文错误。沿用 CameraClient 的 execute 请求，无独立 undo 通信接口。
+
+撤销自动返回三张观察图片；目标、朝向点与计划路线保留。实际历史不删除，位置撤销会追加返回路径，纯转向/俯仰/点半径撤销不新增位置点。动作 schema 的 key enum 增加 undo，英文 description 说明用途和备份生命周期，reset 描述说明清除备份；README 同步。system prompt、模型和图片预算配置均未改。
+
+真实 Blender 子进程通信与脚本模型经 Qwen XML 检查通过：undo 工具参数与三图附件、无备份错误、移动/转向/俯仰/点半径的完整恢复、只撤销最近一步且不可连续使用、观察/状态/目标/路线保留备份、目标与路线保留、历史追加返回位置、不合法参数与渲染失败动作保留备份、undo 的俯视渲染失败及 state.json 保存失败后的状态/计划/轨迹/文件回滚和成功重试、失败 reset 保留备份、成功 reset 清空备份、原视角恢复后的图片像素相等、图片预算整组裁剪与 worker 正常退出。报告为 `outputs/undo_check_1l4e8u2j/report.json`，临时脚本 `/tmp/spatialharness-undo-check.py` 和 `/tmp/spatialharness-undo-inject.py`。AST、六工具英文 schema 和 diff 检查通过。未调用真实模型服务或 GPU 重建；重启 main_agent.py 后使用 undo。
+
+
+## 37. 强化当前位置与朝向标记
+
+用户要求相机朝向标记更醒目、放大，并置于最高图层。`scene/rendering/views.py` 将当前位置改为青色圆点，前进箭头改为更宽更长的青色箭头，均增加白边与深色外轮廓；标记整体基础比例从 .025 提高至 .032，保留 w 和绿色 j/l 弧线、正立字母。相机标记相对于俯视相机的深度改为 -.01，位于计划（-.04）和轨迹（-.06）前方；只缩放 x/y，避免大地图的缩放改变深度或引起裁剪。`agent/tools.py` 同步英文观察图例，camera_set_route 描述增加通常建议先 camera_set_target 设置目的地的英文句子，不强制调用顺序。README 同步，system prompt 和模型配置未改。
+
+复用 camera_20261009_003409_499055 的重建进行真实 Blender 渲染，查看三栏预览并检查目标、路线和历史轨迹与相机标记重叠时的层级；960/480、yaw 0/45/90/180 的朝向、字母正立、层级和裁剪检查通过，第一视角隐藏标记，三图附件和英文说明检查通过。报告为 `outputs/camera_marker_check_gn7fu9np/report.json`，普通预览为 `0001_distinct_current_camera.png`，重叠预览为 `0002_overlap_priority.png`；脚本为 `/tmp/spatialharness-camera-marker-check.py`。没有调用模型导航或 GPU 重建；新启动的 worker 使用新标记，既有会话图片不重写。
+
+
+## 38. 路线规划沿空地避开障碍
+
+用户要求 camera_set_route 提醒模型走空地，避免穿模和撞墙。`agent/tools.py` 的英文 description 增加每段路线沿可见空地和通道规划、与墙体/隔断/家具/设施保持间距的说明；点云缺口不代表可通行，不确定时检查当前第一视角。仅修改工具说明，仍不提供碰撞检测或自动执行路线。语法和 diff 检查通过，未运行模型或 Blender。

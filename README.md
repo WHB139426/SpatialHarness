@@ -30,7 +30,7 @@ assets/                  # 字体与标签图片
 
 修改动作解析或移动方式看 `scene/camera_control/`，修改图片显示看 `scene/rendering/`，修改抽帧和重建看 `scene/reconstruction/`。调用关系为 `main_env.py` → `CameraSession` → `SceneRenderer`：相机会话执行动作并维护状态，渲染器根据当前位姿生成观察结果，终端交互调用会话方法。重建结果通过 PLY、相机 JSON 和抽帧文件传给查看器。
 
-`CameraSession` 提供 `observe()`、`execute(key, magnitude=None)`、`status()` 和 `reset()`。观察、动作和重置返回三张独立图片路径与相机状态的记录；状态查询只返回相机状态。俯视图内的轨迹包含本次动作后的最新位置；全部图片和记录成功保存后才提交状态和移动历史，失败时恢复之前的相机位姿与历史。
+`CameraSession` 提供 `observe()`、`execute(key, magnitude=None)`、`status()`、`reset()`、`set_target(observation_id, point, look_at=None)` 和 `set_route(observation_id, points)`。除状态查询外均返回三图观察记录。全部图片和记录成功保存后才提交相机状态、移动历史和计划标记；失败时保留之前的状态。
 
 环境默认配置在 `main_env.py` 顶部，agent 默认配置在 `main_agent.py` 顶部。初始相机位姿由场景初始化计算，并作为位置和方向传给 `CameraSession`；会话负责动作和状态，不计算地面或眼高。
 
@@ -47,7 +47,7 @@ agent/
   tools.py               # 相机工具和内部媒体附件构造
 ```
 
-`Agent` 接收 backend、protocol、工具列表及显式配置，`run(prompt)` 持续执行模型与工具调用直至返回回答；`prompt` 可以是文本或多模态内容列表。工具可以通过 `ToolOutput.messages` 附加视觉观察。`create_tools(camera)` 返回绑定一个运行中 `CameraClient` 的四个工具：
+`Agent` 接收 backend、protocol、工具列表及显式配置，`run(prompt)` 持续执行模型与工具调用直至返回回答；`prompt` 可以是文本或多模态内容列表。工具可以通过 `ToolOutput.messages` 附加视觉观察。`create_tools(camera)` 返回绑定一个运行中 `CameraClient` 的六个工具：
 
 | 工具 | 参数与行为 |
 | --- | --- |
@@ -55,22 +55,31 @@ agent/
 | `camera_observe` | 无参数：渲染当前位姿，返回观察记录与三张独立图片 |
 | `camera_status` | 无参数：只返回相机状态，不渲染 |
 | `camera_reset` | 无参数：恢复初始位姿和点半径，返回观察记录与三张独立图片 |
+| `camera_set_target` | `observation_id`、`point`、可选 `look_at`：仅在俯视图标记相机目的地及最终朝向点，返回三图观察 |
+| `camera_set_route` | `observation_id`、`points`：仅在俯视图画出有序途经点和计划路线，返回三图观察 |
 
-agent 的 `key` 仅接受前进和转向的五个按键：
+agent 的 `key` 接受前进和转向的五个按键，以及单步撤销：
 
 | 按键 | 含义 |
 | --- | --- |
 | w | 前进 |
 | j / l | 向左 / 向右转头 |
 | i / k | 抬头 / 低头 |
+| undo | 撤销最近一次成功动作，恢复该动作前的完整相机状态 |
 
-例如 `camera_action(key="w", magnitude=0.5)` 或 `camera_action(key="j", magnitude=30)`。`key` 只能是单个按键，幅度单独传入，不能写成 `w0.5` 或按键串。所有方向按当前第一视角相机理解：前进沿当前水平朝向并保持高度，不受俯仰影响。`magnitude` 是 w 的距离或 j/l/i/k 的角度，单位沿用环境，省略时使用配置步长。横向移动或返回旧位置时，先转向再用 w；退出遮挡同样先转向清晰位置，再小步前进。其他按键在工具层直接拒绝。手动环境仍保留完整键盘控制，地图仅标出前进 w 和转向 j/l。动作结果已经附加图片，模型直接查看即可。`create_tools(camera)` 不启动或关闭 worker，生命周期由调用方管理；工具列表没有 coding、shell、搜索或关闭相机工具。向 `Agent` 传入 `tools=create_tools(camera)` 即可使用这一组工具。
+例如 `camera_action(key="w", magnitude=0.5)` 或 `camera_action(key="j", magnitude=30)`。`key` 只能是 w/j/l/i/k 中的单个按键或 undo，幅度单独传入，不能写成 `w0.5` 或按键串。所有方向按当前第一视角相机理解：前进沿当前水平朝向并保持高度，不受俯仰影响。`magnitude` 是 w 的距离或 j/l/i/k 的角度，单位沿用环境，省略时使用配置步长。横向移动或返回旧位置时，先转向再用 w；退出遮挡同样先转向清晰位置，再小步前进。其他按键在工具层直接拒绝。手动环境仍保留完整键盘控制，地图仅标出前进 w 和转向 j/l。动作结果已经附加图片，模型直接查看即可。`create_tools(camera)` 不启动或关闭 worker，生命周期由调用方管理；工具列表没有 coding、shell、搜索或关闭相机工具。向 `Agent` 传入 `tools=create_tools(camera)` 即可使用这一组工具。
+
+system prompt 只维护角色、三种视角的用途、证据判断与通用工具选择原则。按键、参数、坐标、单位和默认值由工具 schema 说明，地图图例由观察消息提供。`main_agent.py` 将当前距离单位和环境步长传入 `create_tools(camera, distance_units=..., move_step=..., look_step=...)`，动态生成动作工具描述；system prompt 不再需要格式化或逐个列出工具。新增工具通常只需完善 schema 和必要的结果说明。
+
+`camera_action(key="undo")` 不接受 magnitude，恢复最近一次成功动作前的位置、yaw、pitch 和点半径，并返回三图观察。只保留一个状态备份，不支持连续撤销多步；成功撤销或 reset 后清空备份。观察、状态查询与目标/路线设置保留备份，失败的动作、undo 或 reset 也保留它。目标与路线继续显示，实际轨迹不删除；撤销位置变化时会追加返回路径，纯朝向撤销不增加路径点。没有可撤销动作时返回错误。CameraClient 和 CameraSession 同样通过 `execute('undo')` 调用，工具总数仍为六，system prompt 不需要修改。
 
 构造时由调用方传入系统提示词、最大步骤数和图片保留数量（`-1` 表示不限制）；默认不写文件。提供 `conversation_path` 时保存当前对话 JSON，新建 agent 从新对话开始，不自动恢复旧记录。`reset()` 仅重置 agent 消息历史，与相机重置无关。图片历史限制不处理视频附件。
 
 相机观察在一条自动 user 消息中按 `first_person_view`、`top_down_view`、`nearest_video_frame` 的顺序附加三张图片，使用英文开闭标签和说明。它们分别为当前第一视角、叠加移动历史的当前俯视图、匹配参考视频帧，由模型服务分别预处理。人工查看的拼接 PNG 按相同顺序展示三栏，不自动附加给模型。历史裁剪按整条消息中的三张图片一起处理，保留其他文字，不会拆散一组观察。
 
-`top_down_view` 直接叠加本次会话的移动历史，无需第四张图片或额外工具调用：紫红色线与箭头表示移动路径及行进方向，黄色点表示各段起点，橙点与蓝色 w 箭头表示当前位置和朝向。只记录成功的位置变化，转头、观察和点半径调整不新增位置；`camera_reset` 保留旧轨迹并开始新段，不连接重置前后位置。俯视投影不显示高度变化。为包含所有历史位置，俯视图的范围可能随观察变化，不能直接跨图比较像素坐标。旧的 `camera_trajectory` 工具与独立通信请求已移除。
+`top_down_view` 直接叠加本次会话的移动历史，无需第四张图片或额外工具调用：紫红色线与箭头表示移动路径及行进方向，黄色点表示各段起点，带白边和黑色外轮廓的大青色圆点与宽 `w` 箭头表示当前位置和朝向，显示在目标、计划路线及历史轨迹之上。只记录成功的位置变化，转头、观察和点半径调整不新增位置；`camera_reset` 保留旧轨迹并开始新段，不连接重置前后位置。俯视投影不显示高度变化。为包含历史位置与计划标记，俯视图的范围可能随观察变化，不能直接跨图比较像素坐标。旧的 `camera_trajectory` 工具与独立通信请求已移除。
+
+计划标记仅对应俯视图。两个新工具使用最新观察记录的 `observation_id` 与归一化 `[x, y]` 坐标，左上角 `[0, 0]`、右下角 `[1, 1]`；旧编号和无效坐标会被拒绝。`camera_set_target` 用红色 G 圆圈标记相机应该站的位置，可选 `look_at` 用红色 LOOK 与箭头标记最终应面向的对象。设置新目标会清除旧路线；`point=null` 清除全部计划。规划路线前通常建议先用 `camera_set_target` 设置目的地，但这不是强制要求。`camera_set_route` 的 `points` 是依次经过的未来途经点，包含终点；工具自动将当前相机位置作为起点，用带编号的蓝点和蓝色虚线绘制。`points=[]` 只清除路线。目标、朝向点和路线保存在场景坐标中，在后续移动、地图缩放和 reset 后继续显示；reset 不会把旧路线起点改成新的当前位置，需要时重新规划。工具不移动相机、不检查碰撞、不自动跟随路线，第一视角与参考帧仍对应当前位姿。每次标记返回新的观察编号，下一次标记需要使用该编号。
 
 此前三图版本已通过真实 `qwen3.8-flash-next` + Blender 检查：使用合成点云 fixture 和默认视频的原始帧，两张渲染图为 960×960，参考帧为 640×480；三次问答覆盖转向、重置、状态查询及超过四组观察后的完整组裁剪。记录在 [report.json](outputs/three_image_live_d286ldmy/report.json)。渲染和状态保存失败时的文件清理、状态回滚另通过 [Blender 检查](outputs/three_image_check_of8rnicj/report.json)。本轮没有重跑 GPU 重建，也未评估拆图后的空间推理精度提升。
 
@@ -101,7 +110,7 @@ python main_agent.py --video /path/to/video.mp4 --resolution 480 --samples 4
 python main_agent.py --help
 ```
 
-每次运行创建新的 `outputs/camera_<时间戳>/`，保存重建、观察 PNG/JSON、`state.json`、`render.log` 和 `conversation.json`。会话顶层的 PNG 只保存三栏拼接预览；agent 使用的独立第一人称图和含轨迹的俯视图放在 `.views/` 子目录，参考帧仍在 `reconstruction/` 中。不自动恢复旧会话。默认 Metric 开启时移动距离近似为米；使用 `--metric-weights none` 时提示词会说明距离是 VGGT 相对单位。转角单位为度，yaw 使用场景参考轴，不代表地理方位。agent 只获得上述四个相机工具。
+每次运行创建新的 `outputs/camera_<时间戳>/`，保存重建、观察 PNG/JSON、`state.json`、`render.log` 和 `conversation.json`。会话顶层的 PNG 只保存三栏拼接预览；agent 使用的独立第一人称图和含轨迹的俯视图放在 `.views/` 子目录，参考帧仍在 `reconstruction/` 中。不自动恢复旧会话。默认 Metric 开启时移动距离近似为米；使用 `--metric-weights none` 时动作工具描述会说明距离是 VGGT 相对单位。转角单位为度，yaw 使用场景参考轴，不代表地理方位。agent 获得上述六个相机工具。
 
 新入口已通过子进程重建 fixture + 真实 Qwen/Blender 的连续两次提问、移动、重置和退出检查，也通过失败及中断清理检查，记录在 [report.json](outputs/agent_entry_check_29adu93o/report.json)。验证覆盖工具闭环和资源清理，不代表空间推理精度验证。完整视频的 GPU 重建沿用原实现，本轮没有重跑。入口最初新增时保留了原环境入口；现在两个入口已统一命名为 `main_env.py` 和 `main_agent.py`。
 
@@ -109,7 +118,7 @@ python main_agent.py --help
 
 `scene.camera_control.bridge.CameraClient` 可以在普通 Python 中启动并控制持续运行的 Blender worker，不需要导入 `bpy`。它接收完整的 worker 启动命令、日志路径和超时时间；场景初始化完成后，`initial_state` 保存初始状态，此时尚未渲染。
 
-客户端提供 `observe()`、`execute(key, magnitude=None)`、`status()`、`reset()` 和 `close()`。前四项对应 `CameraSession` 方法；观察、动作和重置返回三图观察记录，状态查询不渲染。使用 `with` 会在结束时关闭子进程。相机动作仍是一项按键动作，例如 `execute('w', 0.5)`，不接收组合命令字符串。
+客户端提供 `observe()`、`execute(key, magnitude=None)`、`status()`、`reset()`、`set_target(observation_id, point, look_at=None)`、`set_route(observation_id, points)` 和 `close()`。除 close 外对应 `CameraSession` 方法；状态查询不渲染，其他方法返回三图观察。使用 `with` 会在结束时关闭子进程。相机动作仍是一项按键动作，例如 `execute('w', 0.5)`，不接收组合命令字符串。
 
 Blender worker 仍运行 `main_env.py`。客户端自动追加隐藏参数 `--response-fd`，让内部 `--worker` 分支进入 JSON 循环；请求通过标准输入发送，响应走独立的继承管道，Blender 标准输出与错误输出写入日志。协议为同步串行的逐行 JSON，请求形如 `{"op": "execute", "params": {"key": "w", "magnitude": 0.5}}`；响应包含 `ok`，成功时有 `result`，失败时有 `error`。动作错误可继续请求；通信超时或管道断开会关闭 worker，避免错配后续响应。超时默认配置 `CAMERA_TIMEOUT = 300` 放在 `main_env.py` 顶部，由调用方传入客户端。
 
@@ -213,7 +222,7 @@ reset
 quit
 ```
 
-每次操作都会保存三栏 PNG：第一栏 “FIRST PERSON” 是带准星的第一人称画面；第二栏 “TOP DOWN” 显示当前位置、朝向及本次会话的历史移动路径；第三栏 “NEAREST VIDEO FRAME” 是位置和朝向最接近的原视频抽帧，保持原始宽高比并留黑边，不裁切。英文标签使用项目自带的 [DejaVu Sans 字体](assets/fonts/DejaVuSans-Bold.ttf)（[许可证](assets/fonts/LICENSE.txt)），不依赖系统字体路径。俯瞰图中的橙色圆点标示当前相机位置，单个蓝色 `w` 箭头指向当前前进方向。绿色弧形箭头表示 `j` 向左转（俯视图逆时针）、`l` 向右转（顺时针）。前进箭头和弧线随相机转向，`w/j/l` 三个字母保持正立并带深色底，低分辨率时设置最小显示尺寸。标记只表达方向，不代表移动距离或转角大小。所有按键控制同一台第一人称相机，第一、第二栏随当前状态同步更新，第三栏根据当前相机姿态重新匹配。俯瞰图只显示水平朝向；`i/k` 改变的俯仰角可从左侧画面看到。
+每次操作都会保存三栏 PNG：第一栏 “FIRST PERSON” 是带准星的第一人称画面；第二栏 “TOP DOWN” 显示当前位置、朝向及本次会话的历史移动路径；第三栏 “NEAREST VIDEO FRAME” 是位置和朝向最接近的原视频抽帧，保持原始宽高比并留黑边，不裁切。英文标签使用项目自带的 [DejaVu Sans 字体](assets/fonts/DejaVuSans-Bold.ttf)（[许可证](assets/fonts/LICENSE.txt)），不依赖系统字体路径。俯瞰图中的大青色圆点标示当前相机位置，宽青色 `w` 箭头指向当前前进方向；两者带白边和黑色外轮廓，并显示在目标、计划路线及历史轨迹之上。绿色弧形箭头表示 `j` 向左转（俯视图逆时针）、`l` 向右转（顺时针）。前进箭头和弧线随相机转向，`w/j/l` 三个字母保持正立并带深色底，低分辨率时设置最小显示尺寸。标记只表达方向，不代表移动距离或转角大小。所有按键控制同一台第一人称相机，第一、第二栏随当前状态同步更新，第三栏根据当前相机姿态重新匹配。俯瞰图只显示水平朝向；`i/k` 改变的俯仰角可从左侧画面看到。
 
 每次渲染后还会从本次重建的 `vggt_cameras.json` 中查找位置和镜头朝向最接近的原视频抽帧。终端打印该 JPG 路径、位置距离和朝向夹角；同名渲染 JSON 的 `nearest_frame` 字段也记录这些信息。匹配分数为 `(位置距离 / 0.5)^2 + (朝向夹角 / 20°)^2`；只比较位置与镜头朝向，不使用内参或画面内容。最近帧可能仍与当前视角相差很大，因此请同时查看距离和夹角。
 
