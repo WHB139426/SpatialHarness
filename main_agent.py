@@ -64,9 +64,9 @@ from agent.tools import create_tools
 from scene.camera_control.bridge import CameraClient
 
 
-MODEL = 'qwen3.8-27b' # 'qwen3.8-flash-next'  'qwen3.8-27b'
+MODEL = 'qwen3.8-flash-next' # 'qwen3.8-flash-next'  'qwen3.8-27b'
 BASE_URL = 'http://127.0.0.1:8000/v1'
-MAX_TOKENS = 8192
+MAX_TOKENS = 128*1024
 TEMPERATURE = 1
 TOP_P = 0.95
 TOP_K = 20
@@ -75,7 +75,6 @@ REASONING_EFFORT = 'medium'
 PRESERVE_THINKING = True
 MAX_STEPS = 100
 MAX_CONVERSATION_IMAGES = 4*3  # 4 complete three-image camera observations.
-MODEL_TIMEOUT = 180
 
 SYSTEM_PROMPT = '''Role
 You are a camera-navigation agent exploring a reconstructed 3D point-cloud scene.
@@ -93,6 +92,12 @@ viewing direction. Point-cloud gaps may be reconstruction artifacts, not proof o
 
 Top-down view (<top_down_view>)
 This is an overhead map showing the current camera position and horizontal heading.
+The orange dot marks the camera position. A cross labeled w/a/s/d shows the current horizontal
+movement directions: the long blue w arrow points forward, a left, s backward, and d right.
+Green curved arrows show camera turns: j turns left (counterclockwise on this map),
+and l turns right (clockwise). WASD changes position; j/l changes heading without moving.
+The cross and curved arrows rotate with the camera's heading while all letters stay upright.
+The marker indicates directions, not movement distances or turn angles.
 Use it to understand the scene layout, track movement, and plan navigation.
 It does not show camera pitch. Its axes and the camera yaw are scene references, not geographic
 directions; do not infer compass directions.
@@ -120,6 +125,10 @@ camera_reset restores the initial pose and radius; use it when requested or rest
 Camera actions and units
 camera_action executes one key: w/s forward/backward, a/d left/right, q/e down/up,
 j/l turn left/right, i/k look up/down, +/- increase/decrease point radius.
+WASD movement is relative to the current first-person camera's horizontal heading,
+not the top-down image axes or the reference video frame. Movement directions change after
+turning the camera. WASD movement stays horizontal and preserves height, regardless of pitch.
+q/e move down/up along the scene's vertical axis, independently of camera pitch.
 WASD magnitudes use {distance_units}; IJKL magnitudes use degrees.
 Defaults are {move_step} distance units and {look_step} degrees.
 q/e use the fixed movement step and +/- use {point_step}; these four keys do not accept a magnitude.
@@ -154,7 +163,7 @@ def main():
     backend = VLLMBackend(MODEL, base_url=BASE_URL, max_tokens=MAX_TOKENS,
                           temperature=TEMPERATURE, top_p=TOP_P, top_k=TOP_K)
     try:
-        backend.client = backend.client.with_options(timeout=MODEL_TIMEOUT, max_retries=0)
+        backend.client = backend.client.with_options(timeout=180, max_retries=0)
         with CameraClient(command, log_path=output / 'render.log', timeout=environment.CAMERA_TIMEOUT) as camera:
             distance_units = ('scene units, approximately meters' if args.metric_weights.lower() != 'none'
                               else 'VGGT relative scene units, not meters')

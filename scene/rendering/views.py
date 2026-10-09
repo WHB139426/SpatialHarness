@@ -43,6 +43,10 @@ class OverheadView:
         self.marker.parent = camera
         orange = emission_material('Overhead position orange', (1, .42, .02), strength=2)
         cyan = emission_material('Overhead direction cyan', (.02, .85, 1), strength=2)
+        gray = emission_material('Overhead movement gray', (.6, .68, .72))
+        green = emission_material('Overhead rotation green', (.16, 1, .42))
+        white = emission_material('Overhead movement letters', (1, 1, 1))
+        dark = emission_material('Overhead movement label background', (.012, .012, .012))
         segments = 24
         disk = [(0, 0, 0)] + [
             (.3 * math.cos(2 * math.pi * i / segments),
@@ -51,10 +55,57 @@ class OverheadView:
         _mesh('First-person position', disk,
               [(0, i + 1, (i + 1) % segments + 1) for i in range(segments)],
               orange, self.marker)
-        _mesh('First-person heading',
-              [(-.13, .08, 0), (.13, .08, 0), (.13, .9, 0),
-               (.45, .9, 0), (0, 1.55, 0), (-.45, .9, 0), (-.13, .9, 0)],
-              [(0, 1, 2, 3, 4, 5, 6)], cyan, self.marker)
+        self.marker_labels = []
+        font_file = Path(__file__).resolve().parents[2] / 'assets' / 'fonts' / 'DejaVuSans-Bold.ttf'
+        font = bpy.data.fonts.load(str(font_file), check_existing=True)
+        labels = []
+        for key, x, y, length in (('w', 0, 1, 1.6), ('a', -1, 0, .9),
+                                  ('s', 0, -1, .9), ('d', 1, 0, .9)):
+            direction = Vector((x, y, 0))
+            side = Vector((-y, x, 0)) * .09
+            start, end = direction * .32, direction * length
+            _mesh(f'Movement {key} arm', [start - side, start + side, end + side, end - side],
+                  [(0, 1, 2, 3)], cyan if key == 'w' else gray, self.marker)
+            if key == 'w':
+                _mesh('Movement w arrow', [(-.26, length - .35, 0),
+                                          (.26, length - .35, 0), (0, length, 0)],
+                      [(0, 1, 2)], cyan, self.marker)
+            labels.append((key, direction * (length + .55), cyan if key == 'w' else white))
+
+        for key, start, end, sign in (('j', 100, 155, 1), ('l', 80, 25, -1)):
+            radius, width, segments = 2.6, .10, 32
+            angles = [math.radians(start + (end - start) * i / segments)
+                      for i in range(segments + 1)]
+            vertices = [(r * math.cos(angle), r * math.sin(angle), 0)
+                        for angle in angles for r in (radius - width / 2, radius + width / 2)]
+            _mesh(f'Rotation {key} arc', vertices,
+                  [(2 * i, 2 * i + 1, 2 * i + 3, 2 * i + 2) for i in range(segments)],
+                  green, self.marker)
+            angle = angles[-1]
+            end = Vector((radius * math.cos(angle), radius * math.sin(angle), 0))
+            tangent = Vector((-math.sin(angle), math.cos(angle), 0)) * sign
+            side = Vector((-tangent.y, tangent.x, 0)) * .22
+            _mesh(f'Rotation {key} arrow',
+                  [end + tangent * .25, end - tangent * .18 + side, end - tangent * .18 - side],
+                  [(0, 1, 2)], green, self.marker)
+            labels.append((key, Vector((-2.65 if key == 'j' else 2.65, 2.3, 0)), green))
+
+        for key, position, material in labels:
+            letters = bpy.data.curves.new(f'Marker {key} text', 'FONT')
+            letters.body = key
+            letters.font = font
+            letters.size = 1.2
+            letters.align_x = letters.align_y = 'CENTER'
+            letters.materials.append(material)
+            label = bpy.data.objects.new(f'Marker {key} text', letters)
+            scene.collection.objects.link(label)
+            label.parent = self.marker
+            label.location = position
+            self.marker_labels.append(label)
+            _mesh(f'Marker {key} label background',
+                  [(-.66, -.57, -.001), (.66, -.57, -.001),
+                   (.66, .57, -.001), (-.66, .57, -.001)],
+                  [(0, 1, 2, 3)], dark, label)
         self.marker.hide_render = True
 
     def update(self, position, forward):
@@ -74,11 +125,14 @@ class OverheadView:
         x = (position - self.center).dot(self.right) - x_mid
         y = (position - self.center).dot(self.screen_up) - y_mid
         self.marker.location = (x, y, -.05)
-        scale = self.camera.data.ortho_scale * .025
+        # Keep movement letters readable when rendering smaller previews.
+        scale = self.camera.data.ortho_scale * max(.025, 18 / self.scene.render.resolution_x)
         self.marker.scale = (scale, scale, scale)
         heading_x = forward.dot(self.right)
         heading_y = forward.dot(self.screen_up)
         self.marker.rotation_euler.z = math.atan2(-heading_x, heading_y)
+        for label in self.marker_labels:
+            label.rotation_euler.z = -self.marker.rotation_euler.z
 
 
 def create_crosshair(camera, scene):

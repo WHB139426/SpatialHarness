@@ -89,7 +89,7 @@ requirements.txt                Python 依赖
 每次观察保存三栏 PNG：
 
 - 左：带准星的第一人称点云视图。
-- 中：正交俯瞰图，标记相机投影位置与水平朝向。
+- 中：正交俯瞰图，用橙色圆点标记位置，带 WASD 字母的三短一长十字标记水平移动方向；蓝色长 `w` 臂带前进箭头，绿色 `j/l` 弧形箭头标记向左/右转，六个字母始终正立。
 - 右：位置与朝向最接近的原视频抽帧，保持原始宽高比并留黑边。
 
 最近帧匹配分数为 `(位置距离 / 0.5)^2 + (朝向夹角 / 20°)^2`，仅比较位姿；右栏不是当前视角的精确实拍图，匹配距离与角度会记录下来。第一人称使用归一化 VGGT 内参的中位数，保持固定视野，输出方形画面；向上下扩展视野而不是拉伸视频投影。
@@ -105,8 +105,9 @@ outputs/camera_<时间戳>/
     vggt_cameras.json
     frames/frame_<原视频帧号>.jpg
   0001_initial.png
-  0001_initial_first_person.png
-  0001_initial_top_down.png
+  .views/
+    0001_initial_first_person.png
+    0001_initial_top_down.png
   0001_initial.json
   0002_<动作>.png / .json
   state.json
@@ -315,3 +316,22 @@ Qwen protocol 沿用源仓库 Qwen3.8 的 XML 工具调用格式。backend 保�
 验证通过：5 项三图本地检查、7 项入口生命周期检查；真实 Blender 默认 960×960 双渲染图与 640×480 参考帧、移动与重置、第二视图渲染失败和状态提交失败清理/回滚；真实 Flash-Next + Blender 三次问答、右转 20°、重置、状态查询及第五组三图进入后的 12 张预算完整组裁剪。服务 `/models` 确认 `qwen3.8-flash-next` 使用 262,144 上下文。图像重置比较解码后像素，独立 PNG 的文件元数据可能不同。本轮没有重跑 GPU 视频重建，fixture 采用 221 点合成场景搭配默认视频首帧，不用于证明空间推理精度提升。
 
 最终 Blender 报告为 `outputs/three_image_check_of8rnicj/report.json`，真实 Flash-Next 报告为 `outputs/three_image_live_d286ldmy/report.json`，对话与每次请求的图片数量在同目录 `conversation.json`、`requests.json`。临时检查脚本在 `/tmp/spatialharness-three-images-checks/`。中间临时检查先修正了未生效的 Blender operator 故障注入，再将 PNG 字节相等断言改为解码像素相等；业务实现无需因这两处检查问题调整。最终语法/帮助/差异检查通过，其他业务源码和模型文件哈希保持不变；未提交代码。
+
+## 18. 输出目录只展示拼接预览
+
+用户要求输出里只展示拼接后的图片。渲染器将新观察的独立第一人称图和俯视图保存到会话的 `.views/` 子目录，顶层 PNG 只保留三栏预览；record 与 agent 附件直接使用新路径，参考帧继续使用 `reconstruction/` 原图。已有会话及其对话路径没有迁移。真实 Blender 检查通过：顶层仅有每次观察的拼接图、独立图均在 `.views/`、三图附件路径有效、移动/重置正常、失败时子目录文件也清理且状态回滚。报告为 `outputs/view_storage_check_ggoouz6o/report.json`，临时脚本为 `/tmp/spatialharness-three-images-checks/check_view_storage.py`。本轮业务改动仅在 `scene/rendering/renderer.py`，未调用模型或重建。
+
+## 19. 俯视图 WASD 十字标记
+
+用户授权将蓝色箭头改为三短一长的十字，并在各方向附小写 WASD 字母。`OverheadView` 保留橙色位置圆点，`w` 长臂与字母用蓝色突出，其余 `a/s/d` 为等长短臂和白色字母；字母有深色底并抵消父标记的旋转，保持地图中正立。低分辨率使用最小屏幕显示尺寸。`main_agent.py` 的英文 top-down 说明同步描述标记，明确其表示方向而非移动距离。没有改导航或工具接口。
+
+使用合成点云 fixture 完成真实 Blender 渲染：960、480 各五个 yaw（0/45/90/180/270），十字四臂世界方向均与 `Navigator.step()` 的 WASD 位移方向一致，字母保持正立，俯仰 60° 不改变十字朝向，标记不显示在第一人称图中；已查看两种分辨率的实际图像。最终报告与拼接预览在 `outputs/map_marker_check_rdgm7g63/`，报告为 `report.json`，例如 `960/0003_yaw45.png`、`480/0003_yaw45.png`。临时脚本为 `/tmp/spatialharness-map-marker/check_blender.py`。首次检查的角度断言遇到 +π/-π 环绕，改为比较归一化角差后通过；视觉检查后提高小分辨率标记的最小尺寸并重跑检查。未运行重建或模型推理。
+
+
+## 20. 转向弧线和 w 箭头
+
+用户先查看独立图标预览，再授权按预览加入 `j/l` 弧形箭头，并要求 `w` 方向也带箭头。`scene/rendering/views.py` 在蓝色长臂末端增加三角箭头，绿色弧线表示 `j` 逆时针左转、`l` 顺时针右转；弧线随相机朝向旋转，六个字母共享正立和深色底处理。`main_agent.py` 英文提示词同步解释平移与转向、方向标记不表示距离或转角大小，README 同步说明。未修改导航或工具接口。
+
+真实 Blender 合成点云检查通过：960、480 各五个 yaw（0/45/90/180/270），WASD 与实际位移一致，`w` 箭头与前进方向一致，弧形箭头与实际 `j/l` 转向一致，六个字母始终正立、俯仰不改变水平标记、第一人称视图隐藏全部标记。已查看两种分辨率的渲染图。报告为 `outputs/rotation_marker_check_a0aiyb8f/report.json`，示例拼接图为 `960/0001_yaw90.png`、`480/0003_yaw45.png`。临时检查脚本为 `/tmp/spatialharness-rotation-marker-check.py`。未调用模型或重跑 GPU 重建。
+
+用户随后要求放大字母：六个字母的字号从 `0.95` 调至 `1.2`（约增大 26%），深色底框半宽/半高从 `0.52/0.45` 同步调至 `0.66/0.57`；十字、箭头和弧线尺寸保持原值。真实 Blender 检查 480/960、yaw 45/90 通过，并查看渲染确认可读性与排布。报告为 `outputs/marker_letters_check_n7yhpcp6/report.json`，示例为 `960/0001_yaw90.png`；临时脚本为 `/tmp/spatialharness-marker-letters-check.py`。

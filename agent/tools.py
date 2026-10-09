@@ -69,7 +69,11 @@ def create_tools(camera) -> list[Tool]:
             description=(
                 'Execute one camera action and return the updated state and three separate view images. '
                 'w/s: forward/back; a/d: left/right; q/e: down/up; '
-                'j/l: turn left/right; i/k: look up/down; +/-: increase/decrease point radius.'
+                'j/l: turn left/right; i/k: look up/down; +/-: increase/decrease point radius. '
+                "WASD movement is relative to the current first-person camera's horizontal heading, "
+                'not the top-down image axes or the reference video frame. Directions change after '
+                'turning the camera. WASD movement stays horizontal and preserves height, regardless '
+                "of pitch. q/e move along the scene's vertical axis, independently of camera pitch."
             ),
             parameters={
                 'type': 'object',

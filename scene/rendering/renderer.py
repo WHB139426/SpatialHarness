@@ -101,8 +101,10 @@ class SceneRenderer:
         next_index = self.index + 1
         action_name = {'+': 'pointsize_plus', '-': 'pointsize_minus'}.get(command, command)
         image_path = self.output / f'{next_index:04d}_{action_name}.png'
-        first_path = image_path.with_name(f'{image_path.stem}_first_person.png')
-        overhead_path = image_path.with_name(f'{image_path.stem}_top_down.png')
+        views_dir = self.output / '.views'
+        views_dir.mkdir(exist_ok=True)
+        first_path = views_dir / f'{image_path.stem}_first_person.png'
+        overhead_path = views_dir / f'{image_path.stem}_top_down.png'
         record_path = image_path.with_suffix('.json')
         state_path = self.output / 'state.json'
         temporary_state = state_path.with_suffix('.json.tmp')

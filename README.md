@@ -88,7 +88,7 @@ python main_agent.py --video /path/to/video.mp4 --resolution 480 --samples 4
 python main_agent.py --help
 ```
 
-每次运行创建新的 `outputs/camera_<时间戳>/`，保存重建、观察 PNG/JSON、`state.json`、`render.log` 和 `conversation.json`。不自动恢复旧会话。默认 Metric 开启时移动距离近似为米；使用 `--metric-weights none` 时提示词会说明距离是 VGGT 相对单位。转角单位为度，yaw 使用场景参考轴，不代表地理方位。agent 只获得相机与媒体工具。
+每次运行创建新的 `outputs/camera_<时间戳>/`，保存重建、观察 PNG/JSON、`state.json`、`render.log` 和 `conversation.json`。会话顶层的 PNG 只保留拼接预览；agent 使用的独立第一人称图和俯视图放在 `.views/` 子目录，参考帧仍在 `reconstruction/` 中。不自动恢复旧会话。默认 Metric 开启时移动距离近似为米；使用 `--metric-weights none` 时提示词会说明距离是 VGGT 相对单位。转角单位为度，yaw 使用场景参考轴，不代表地理方位。agent 只获得相机与媒体工具。
 
 新入口已通过子进程重建 fixture + 真实 Qwen/Blender 的连续两次提问、移动、重置和退出检查，也通过失败及中断清理检查，记录在 [report.json](outputs/agent_entry_check_29adu93o/report.json)。验证覆盖工具闭环和资源清理，不代表空间推理精度验证。完整视频的 GPU 重建沿用原实现，本轮没有重跑。入口最初新增时保留了原环境入口；现在两个入口已统一命名为 `main_env.py` 和 `main_agent.py`。
 
@@ -200,7 +200,7 @@ reset
 quit
 ```
 
-每次操作都会渲染第一人称和俯瞰视角，并把匹配的原视频帧拼成一张三栏 PNG：左侧 “FIRST PERSON” 是带准星的第一人称画面；中间 “TOP DOWN” 是正交俯瞰图；右侧 “NEAREST VIDEO FRAME” 是位置和朝向最接近的原视频抽帧，保持原始宽高比并留黑边，不裁切。英文标签使用项目自带的 [DejaVu Sans 字体](assets/fonts/DejaVuSans-Bold.ttf)（[许可证](assets/fonts/LICENSE.txt)），不依赖系统字体路径。俯瞰图中的橙色圆点标示当前相机在地图上的投影位置，蓝色箭头表示水平朝向。所有按键控制同一台第一人称相机，左侧和中间画面同步更新，右侧根据当前相机姿态重新匹配。俯瞰图只显示水平朝向；`i/k` 改变的俯仰角可从左侧画面看到。
+每次操作都会渲染第一人称和俯瞰视角，并把匹配的原视频帧拼成一张三栏 PNG：左侧 “FIRST PERSON” 是带准星的第一人称画面；中间 “TOP DOWN” 是正交俯瞰图；右侧 “NEAREST VIDEO FRAME” 是位置和朝向最接近的原视频抽帧，保持原始宽高比并留黑边，不裁切。英文标签使用项目自带的 [DejaVu Sans 字体](assets/fonts/DejaVuSans-Bold.ttf)（[许可证](assets/fonts/LICENSE.txt)），不依赖系统字体路径。俯瞰图中的橙色圆点标示当前相机位置，三短一长的十字标示 WASD 水平移动方向：蓝色长臂 `w` 带箭头指向前方，短臂 `a/s/d` 分别向左、后、右。绿色弧形箭头表示 `j` 向左转（俯视图逆时针）、`l` 向右转（顺时针）。十字和弧线随相机转向，六个字母保持正立并带深色底，低分辨率时设置最小显示尺寸。标记只表达方向，不代表移动距离或转角大小。所有按键控制同一台第一人称相机，左侧和中间画面同步更新，右侧根据当前相机姿态重新匹配。俯瞰图只显示水平朝向；`i/k` 改变的俯仰角可从左侧画面看到。
 
 每次渲染后还会从本次重建的 `vggt_cameras.json` 中查找位置和镜头朝向最接近的原视频抽帧。终端打印该 JPG 路径、位置距离和朝向夹角；同名渲染 JSON 的 `nearest_frame` 字段也记录这些信息。匹配分数为 `(位置距离 / 0.5)^2 + (朝向夹角 / 20°)^2`；只比较位置与镜头朝向，不使用内参或画面内容。最近帧可能仍与当前视角相差很大，因此请同时查看距离和夹角。
 
