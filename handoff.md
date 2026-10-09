@@ -402,3 +402,31 @@ Qwen protocol 沿用源仓库 Qwen3.8 的 XML 工具调用格式。backend 保�
 用户授权按讨论方案修改 `main_agent.py` 的英文 SYSTEM_PROMPT。用 Evidence from the views 明确三视角用途和参考通道需要当前观察确认；增加 Navigation planning、Action and verification、Recovery、Completion 分段。要求短路线和当前路标、动作前英文简述目的与预期、动作后验证、连续三步无进展且无新信息时重新规划、贴近表面完全遮挡时先退回清晰位置、避免无依据的反向转头与重复路线、不推算未标定的世界坐标/地图距离、j/l 弧线只表示旋转、满足最终第一视角条件后停止多余调整。保留原视角说明、工具工作流、第一视角参照及按键单位，通用空间问答仍按证据回答。不改工具、图片设置、模型参数或 Agent 循环。
 
 Python AST 语法检查、纯英文检查、分段和四个格式占位符检查、米制/相对单位两种填充模式及 diff 检查通过。本轮未重跑模型导航，实际动作效率改善仍需新会话验证；运行中的 Agent 不会自动更新既有 system message，重启 `main_agent.py` 后使用新提示词。
+
+
+## 29. agent 仅保留前进和转向
+
+用户要求剥夺 a/s/d，仅保留 w 和转向。按“仅保留前进和转向”实现，已向用户说明 agent 可用键为 w、j/l、i/k；q/e 与 +/- 同样不再提供。`agent/tools.py` 使用同一五键列表生成 schema 并在调用相机前检查，旧按键不能绕过枚举限制。手动环境的导航、键盘、地图图标保留原功能；英文 SYSTEM_PROMPT 说明地图 a/s/d 只是方位参考，横向或返回旧位置必须先转向再前进，完全遮挡时先转向最后清晰位置并小步前进。距离说明只对应 w，角度仍对应 j/l/i/k；删除点半径动作的提示及无用的 point_step 格式填充。README 同步。
+
+真实 Blender 合成点云、脚本模型和 Qwen XML 协议检查通过：五键接口、转向后前进、转身后沿原路前进、抬头低头、三图附件、状态与 reset 正常；17 种无效参数返回错误且不改变状态或附加图片。另检查已移除按键、组合命令和错误类型不会到达相机执行函数。Python 语法、纯英文及米制/相对单位格式化、diff 检查通过。报告为 `outputs/forward_turns_check_d2v25zrg/report.json`，临时脚本为 `/tmp/spatialharness-forward-turns-check.py`。未重跑真实模型导航；重启 `main_agent.py` 后使用新工具与提示词。
+
+
+## 30. 俯视图恢复单前进箭头
+
+用户要求删除俯视图 a/s/d 标记，恢复单箭头，保留 w 和 j/l 弧线。`scene/rendering/views.py` 删除三个短臂、字母及底框，前进箭杆和箭头合为单个蓝色网格，保留 w 字母、橙色位置圆点、绿色 j/l 弧形箭头；删除无用的灰色和白色标记材质。朝向旋转、字母正立、放大字号和低分辨率最小尺寸逻辑沿用。英文 SYSTEM_PROMPT 和 README 同步单箭头描述，手动按键和 agent 五键限制不变。
+
+真实 Blender 在 960/480、yaw 90/45 检查通过：仅有 w/j/l 三个字母，无 a/s/d 对象，前进箭头与实际移动一致、左右转弧线与动作一致、字母正立、俯仰不改变水平标记、第一视角隐藏地图标记。已查看 480 俯视图确认图标外观。报告为 `outputs/single_arrow_check_v_bk14fp/report.json`，预览为 `480/.views/0001_yaw90_top_down.png`；临时脚本 `/tmp/spatialharness-single-arrow-check.py`。Python 语法、纯英文提示词填充、diff 检查通过。新启动的 Blender worker 使用新图标，既有图片未重写。
+
+
+## 31. 恢复简短导航提示词
+
+用户在观察 `camera_20261008_195840_789666` 的原地反复转向后，要求恢复未添加多项导航约束的 system prompt。`main_agent.py` 撤回 Navigation planning、Action and verification、Recovery、Completion 四段，恢复原来的 Combining the views 和简短 Navigation and answers。移除固定路标、动作前说明预期、三步无进展、遮挡恢复和通道验证等新增要求。保留当前三图输入、单蓝色 w 箭头和 j/l 弧线说明、仅 w/j/l/i/k 的动作接口、第一视角参照、距离与角度单位、基本工具工作流及参考帧用途。用户已有模型参数和代码外中文任务注释原样保留，没有增加循环检测或工具反馈。
+
+Python 语法、纯英文、米制/相对单位填充、五键/三图/单箭头说明以及新增约束移除检查通过，diff 检查通过。本轮未重跑模型或 Blender；重启 main_agent.py 后使用恢复后的提示词，既有会话的 system message 不会自动改变。
+
+
+## 32. 给定路线的马桶任务 prompt
+
+用户希望将任务改为直接告诉模型从出发点到马桶的路线，以检查能否执行。`main_agent.py` 参数下的任务示例注释改为英文单行 prompt，适用于当前场景的新会话初始位置：先 camera_observe，再依次执行 w 1.0、l 21、w 1.83、j 8、w 0.42、l 92、k 15。明确 key 和 magnitude 分开传入，每次只调用一个动作，沿床左侧向床头前进后转向马桶，按给定序列执行，最终必须用当前第一视角确认马桶可见并正对它。通用 SYSTEM_PROMPT、工具和模型参数保持不变。注释不会自动进入模型请求，运行后需要将英文任务复制到 agent>。
+
+路线根据之前成功会话 `camera_20261008_193217_140353` 的相机位置推导，复用当前 `camera_20261008_222550_137283/reconstruction`，通过真实 Navigator 七次动作与 Blender 终点渲染验证。最终位置约 [0.74427, 0.27340, 3.14080]，yaw 344.956、pitch -15，第一视角清楚显示马桶；预览为 `outputs/guided_route_check_qg3tvkdu/0001_guided_route.png`，报告为同目录 `report.json`，临时脚本 `/tmp/spatialharness-guided-route-check.py`。没有逐步渲染中间观察，也未调用真实模型服务或 GPU 重建；验证证明当前无碰撞检测的相机环境能够到达该目标视角，不证明真实物理通道可通行或 Qwen 能遵循路线。Python AST 与 diff 检查通过。

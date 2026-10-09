@@ -46,7 +46,11 @@ def _observation(record) -> ToolOutput:
 
 def create_tools(camera) -> list[Tool]:
     """Bind environment tools to one CameraClient without owning its lifecycle."""
+    action_keys = list('wjlik')
+
     def camera_action(key: str, magnitude: float | None = None) -> ToolOutput:
+        if key not in action_keys:
+            raise ValueError(f'Unsupported camera key: {key!r}; allowed keys: w, j, l, i, k')
         return _observation(camera.execute(key, magnitude))
 
     no_arguments = {'type': 'object', 'properties': {}, 'additionalProperties': False}
@@ -56,32 +60,28 @@ def create_tools(camera) -> list[Tool]:
             description=(
                 'Execute one camera action and return the updated state and three separate images: '
                 'first-person view, top-down map with movement history, and matched reference video frame. '
-                'All actions apply to the current first-person camera or its rendered point cloud. '
+                'All actions apply to the current first-person camera. '
                 "Interpret directional keys from that camera's perspective, not the top-down "
                 'image axes or the reference video frame. '
-                'w: move forward; s: move backward; a: strafe left; d: strafe right; '
-                "q: move down; e: move up; j: turn toward the camera's own left; l: turn toward its own right; "
+                "w: move forward; j: turn toward the camera's own left; l: turn toward its own right; "
                 'i: tilt the view up; k: tilt the view down; '
-                '+: increase rendered point radius; -: decrease rendered point radius. '
+                'To move sideways or return to an earlier position, turn toward it first, then use w. '
                 "Horizontal movement is relative to the current first-person camera's horizontal heading, "
-                'so movement directions change after turning. Horizontal movement preserves height, regardless of pitch. '
-                "q/e move along the scene's vertical axis, independently of camera pitch."
+                'so the forward direction changes after turning. Forward movement preserves height, regardless of pitch.'
             ),
             parameters={
                 'type': 'object',
                 'properties': {
                     'key': {
-                        'type': 'string', 'enum': list('wasdqejlik+-'),
+                        'type': 'string', 'enum': action_keys,
                         'description': 'One camera key. Pass magnitude separately; do not pass a key sequence or a combined command such as w0.3.',
                     },
                     'magnitude': {
                         'type': 'number', 'exclusiveMinimum': 0,
                         'description': (
-                            'Optional positive finite distance for w/s/a/d in scene units '
+                            'Optional positive finite distance for w in scene units '
                             '(approximately meters with metric scaling), or angle in degrees '
-                            'for j/l/i/k. Omit to use the configured step. '
-                            'q/e and +/- use fixed '
-                            'steps and do not accept a magnitude.'
+                            'for j/l/i/k. Omit to use the configured step.'
                         ),
                     },
                 },

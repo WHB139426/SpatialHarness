@@ -43,9 +43,7 @@ class OverheadView:
         self.marker.parent = camera
         orange = emission_material('Overhead position orange', (1, .42, .02), strength=2)
         cyan = emission_material('Overhead direction cyan', (.02, .85, 1), strength=2)
-        gray = emission_material('Overhead movement gray', (.6, .68, .72))
         green = emission_material('Overhead rotation green', (.16, 1, .42))
-        white = emission_material('Overhead movement letters', (1, 1, 1))
         dark = emission_material('Overhead movement label background', (.012, .012, .012))
         segments = 24
         disk = [(0, 0, 0)] + [
@@ -58,19 +56,11 @@ class OverheadView:
         self.marker_labels = []
         font_file = Path(__file__).resolve().parents[2] / 'assets' / 'fonts' / 'DejaVuSans-Bold.ttf'
         font = bpy.data.fonts.load(str(font_file), check_existing=True)
-        labels = []
-        for key, x, y, length in (('w', 0, 1, 1.6), ('a', -1, 0, .9),
-                                  ('s', 0, -1, .9), ('d', 1, 0, .9)):
-            direction = Vector((x, y, 0))
-            side = Vector((-y, x, 0)) * .09
-            start, end = direction * .32, direction * length
-            _mesh(f'Movement {key} arm', [start - side, start + side, end + side, end - side],
-                  [(0, 1, 2, 3)], cyan if key == 'w' else gray, self.marker)
-            if key == 'w':
-                _mesh('Movement w arrow', [(-.26, length - .35, 0),
-                                          (.26, length - .35, 0), (0, length, 0)],
-                      [(0, 1, 2)], cyan, self.marker)
-            labels.append((key, direction * (length + .55), cyan if key == 'w' else white))
+        _mesh('Movement w arrow',
+              [(-.26, 1.25, 0), (.26, 1.25, 0), (0, 1.6, 0),
+               (-.09, .32, 0), (.09, .32, 0), (.09, 1.25, 0), (-.09, 1.25, 0)],
+              [(0, 1, 2), (3, 4, 5, 6)], cyan, self.marker)
+        labels = [('w', Vector((0, 2.15, 0)), cyan)]
 
         for key, start, end, sign in (('j', 100, 155, 1), ('l', 80, 25, -1)):
             radius, width, segments = 2.6, .10, 32
