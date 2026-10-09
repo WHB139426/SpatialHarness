@@ -8,9 +8,9 @@
 
 项目要提供一个由视频重建得到、可供 agent 自由探索的三维空间环境。目标交互是：agent 获得观察，选择移动或转头动作，环境执行动作并返回新观察，agent 根据结果继续探索和回答空间问题。
 
-目前已实现环境底座：视频重建、米制尺度估计、点云渲染、相机移动、独立三图观察与三栏预览、状态记录和重置。`main_env.py` 提供终端 `camera>` 手动交互，`main_agent.py` 提供 `agent>` 自然语言空间问答。agent 接收三张独立图片，人工预览仍使用拼接图。`CameraSession` 在 Blender 进程中使用，普通 Python 的 agent 通过 `CameraClient` 控制它。
+目前已实现环境底座：视频重建、米制尺度估计、点云渲染、相机移动、独立三图观察与三栏预览、状态记录和重置。`main_env.py` 提供终端 `camera>` 手动交互，`main_agent.py` 提供 `agent>` 自然语言空间问答。agent 接收三张独立图片（第一视角、含轨迹俯视图、参考帧），人工预览也显示三栏。`CameraSession` 在 Blender 进程中使用，普通 Python 的 agent 通过 `CameraClient` 控制它。
 
-**已迁入最小 agent 核心、打通 Blender 通信、包装相机工具，并新增正式 agent 入口。** 用户先授权新增独立 agent 入口，随后指定两个入口命名为 `main_agent.py` 和 `main_env.py`，覆盖此前只保留一个入口的约束。`main_agent.py` 已组装重建子进程、Qwen backend/protocol、相机工具和连续提问循环，改名只同步调整文件引用与帮助文字，业务逻辑保持不变。实际工具以 `create_tools(camera)` 为准，提示词在新入口顶部，README 中旧逐按键接口草案已移除。新入口的连续提问和退出已通过重建 fixture + 真实 Qwen/Blender 检查；完整视频的 GPU 重建本轮未重跑。
+**已迁入最小 agent 核心、打通 Blender 通信、包装相机工具，并新增正式 agent 入口。** 用户先授权新增独立 agent 入口，随后指定两个入口命名为 `main_agent.py` 和 `main_env.py`，覆盖此前只保留一个入口的约束。`main_agent.py` 已组装重建子进程、Qwen backend/protocol、相机工具和连续提问循环，改名只同步调整文件引用与帮助文字，业务逻辑保持不变。实际工具以 `create_tools(camera)` 为准，`camera_action` 使用英文 `action` 名称并在工具层映射到环境按键；提示词在新入口顶部，README 中旧逐按键接口草案已移除。新入口的连续提问和退出已通过重建 fixture + 真实 Qwen/Blender 检查；完整视频的 GPU 重建本轮未重跑。
 
 **碰撞检测暂不做。** 用户刚讨论过难度，随后明确说“算了先不管碰撞检测的事情”。当前相机可以穿墙、离开点云范围，也没有物体交互、物理模拟或任务奖励机制。
 
@@ -34,7 +34,7 @@ agent/
   types.py                      Model/ChatProtocol 类型约定与少量共享数据类型
   backend.py                    vLLM 请求，保留原始工具文本供 protocol 解析
   protocols/qwen.py             Qwen thinking 与 XML 工具调用解析
-  tools.py                      view_media 与 create_tools(camera) 相机工具包装
+  tools.py                      create_tools(camera) 相机工具包装与内部媒体附件
 scene/
   reconstruction/
     reconstruct.py              会话目录、视频抽帧、VGGT 推理、PLY/相机 JSON 写出
@@ -74,7 +74,7 @@ requirements.txt                Python 依赖
 
 `--worker`、隐藏参数 `--session-dir` 和 `--response-fd` 是内部启动机制，不是第二个用户入口。当前普通启动每次都重建，没有公开的“直接打开已有重建”CLI 模式。Python 调用方可以给新会话复用已有重建，再通过 `CameraClient` 启动 worker。`state.json` 保存最近观察，但重新启动不会自动恢复该状态。
 
-`main_agent.py` 复用同一个参数解析器，新建会话并在子进程调用同一重建函数。重建成功后，通过 `CameraClient` 启动 `main_env.py` 的通信 worker，再组装 Qwen agent 与五个工具，进入 `agent>` 连续提问。模型按需调用观察工具，启动时不预先渲染。退出时释放 worker 与模型客户端；重建失败不启动服务，重建中断会终止并回收子进程。
+`main_agent.py` 复用同一个参数解析器，新建会话并在子进程调用同一重建函数。重建成功后，通过 `CameraClient` 启动 `main_env.py` 的通信 worker，再组装 Qwen agent 与四个相机工具（轨迹自动叠加到俯视图），进入 `agent>` 连续提问。模型按需调用观察工具，启动时不预先渲染。退出时释放 worker 与模型客户端；重建失败不启动服务，重建中断会终止并回收子进程。
 
 ## 5. 重建、坐标与观察数据
 
@@ -89,14 +89,15 @@ requirements.txt                Python 依赖
 每次观察保存三栏 PNG：
 
 - 左：带准星的第一人称点云视图。
-- 中：正交俯瞰图，用橙色圆点标记位置，带 WASD 字母的三短一长十字标记水平移动方向；蓝色长 `w` 臂带前进箭头，绿色 `j/l` 弧形箭头标记向左/右转，六个字母始终正立。
-- 右：位置与朝向最接近的原视频抽帧，保持原始宽高比并留黑边。
+- 第二栏：叠加历史路径的正交俯瞰图，用橙色圆点标记位置，带 WASD 字母的三短一长十字标记水平移动方向；蓝色长 `w` 臂带前进箭头，绿色 `j/l` 弧形箭头标记向左/右转，六个字母始终正立。
+- 第三栏：位置与朝向最接近的原视频抽帧，保持原始宽高比并留黑边。
+俯视图内以黄色点表示轨迹起点、紫红色路线和箭头表示历史移动与行进方向。
 
 最近帧匹配分数为 `(位置距离 / 0.5)^2 + (朝向夹角 / 20°)^2`，仅比较位姿；右栏不是当前视角的精确实拍图，匹配距离与角度会记录下来。第一人称使用归一化 VGGT 内参的中位数，保持固定视野，输出方形画面；向上下扩展视野而不是拉伸视频投影。
 
 默认每栏 960×960，合成 PNG 为 2880×960。Blender 使用 Cycles CPU 渲染，8 线程、16 samples；模型推理与渲染使用不同环境。
 
-`RESOLUTION = 960` 已移到 `main_env.py` 顶部，`--resolution` 复用它作为默认值。第一人称与俯视图按这个边长分别保存；agent 使用这两张独立 PNG 和原始参考帧，不使用拼接预览。当前默认视频的参考帧为 640×480，保持原尺寸。一条观察消息含三个英文视图标签及图片，明确前两图是当前状态、第三图是匹配参考帧。实际视觉编码尺寸仍取决于服务端预处理。
+`RESOLUTION = 960` 已移到 `main_env.py` 顶部，`--resolution` 复用它作为默认值。第一人称和含轨迹的俯视图按这个边长分别保存到 `.views/`；agent 使用这两张独立 PNG 和原始参考帧，不使用拼接预览。当前默认视频的参考帧为 640×480，保持原尺寸。一条观察消息含三个英文视图标签及图片，顺序为第一视角、包含最新成功动作的俯视轨迹图、匹配参考帧。实际视觉编码尺寸仍取决于服务端预处理。
 
 ```text
 outputs/camera_<时间戳>/
@@ -114,7 +115,7 @@ outputs/camera_<时间戳>/
   render.log
 ```
 
-观察 record 包含 `command`、`views`、`layout`、`state`、`camera_position`、`camera_forward`、`lens_mm`、`intrinsics`、`nearest_frame`、`image`、`images` 和 `input`。`nearest_frame.image_path` 是原视频帧路径，`image` 是三栏 PNG 预览路径；`images` 按 `first_person`、`top_down`、`nearest_video_frame` 提供独立图片路径。历史观察保留，`state.json` 通过临时文件替换随最近成功观察更新；失败时清理本次新文件，不删除参考帧。
+观察 record 包含 `command`、`views`、`layout`、`state`、`camera_position`、`camera_forward`、`lens_mm`、`intrinsics`、`nearest_frame`、`image`、`images` 和 `input`。`nearest_frame.image_path` 是原视频帧路径，`image` 是三栏 PNG 预览路径；`images` 按 `first_person`、`top_down`、`nearest_video_frame` 提供独立图片路径，top_down 已包含轨迹。历史观察保留，`state.json` 通过临时文件替换随最近成功观察更新；失败时清理本次新文件，不删除参考帧。
 
 ## 6. 已有动作接口
 
@@ -335,3 +336,69 @@ Qwen protocol 沿用源仓库 Qwen3.8 的 XML 工具调用格式。backend 保�
 真实 Blender 合成点云检查通过：960、480 各五个 yaw（0/45/90/180/270），WASD 与实际位移一致，`w` 箭头与前进方向一致，弧形箭头与实际 `j/l` 转向一致，六个字母始终正立、俯仰不改变水平标记、第一人称视图隐藏全部标记。已查看两种分辨率的渲染图。报告为 `outputs/rotation_marker_check_a0aiyb8f/report.json`，示例拼接图为 `960/0001_yaw90.png`、`480/0003_yaw45.png`。临时检查脚本为 `/tmp/spatialharness-rotation-marker-check.py`。未调用模型或重跑 GPU 重建。
 
 用户随后要求放大字母：六个字母的字号从 `0.95` 调至 `1.2`（约增大 26%），深色底框半宽/半高从 `0.52/0.45` 同步调至 `0.66/0.57`；十字、箭头和弧线尺寸保持原值。真实 Blender 检查 480/960、yaw 45/90 通过，并查看渲染确认可读性与排布。报告为 `outputs/marker_letters_check_n7yhpcp6/report.json`，示例为 `960/0001_yaw90.png`；临时脚本为 `/tmp/spatialharness-marker-letters-check.py`。
+
+
+## 21. camera_action 使用英文动作名
+
+用户授权将 agent 相机工具的参数从 `key` 改为 `action`：`move_forward/move_backward`、`move_left/move_right`、`move_down/move_up`、`turn_left/turn_right`、`look_up/look_down`、`increase_point_radius/decrease_point_radius`。`agent/tools.py` 的工厂内只增加一张名称到按键的映射，schema 与函数签名同步修改，没有保留旧参数或按键别名。可选 `magnitude` 的单位、默认值和适用范围继续由环境处理。`CameraClient.execute(key, magnitude)`、桥接协议、导航、手动键盘和地图标记保持原接口。
+
+`main_agent.py` 的英文提示词同步使用动作名，地图段明确 w/a/s/d/j/l 与动作名的对应关系；README 更新参数说明、映射表和调用示例。真实 Blender 合成点云 + 脚本模型经过 Qwen XML 解析与 Agent 循环的检查通过：十二种动作的位移、角度和点半径变化正确，观察仍附三张图片，状态/重置可用；七类无效参数（旧按键、未知动作、旧 key 参数、不允许的 magnitude、非正幅度）返回错误且不改变状态，不附虚假观察。报告为 `outputs/named_actions_check_e1d7jfcb/report.json`，对话为同目录 `conversation.json`，临时脚本为 `/tmp/spatialharness-named-actions-check.py`。已检查提示词格式化和英文文本。本轮未调用真实 Qwen 服务或重跑 GPU 重建。
+
+用户追加要求在 system prompt 和 camera_action description 中说明所有动作的第一视角参照。两处现已明确动作作用于当前第一视角相机或其渲染点云，方向按当前相机视角理解；turn_left/right 是相机自身左右，look_up/down 是抬头/低头，水平移动沿当前水平朝向，垂直移动仍沿场景竖直轴。点半径动作说明为渲染点大小调整。仅修改英文说明，未改动作逻辑；语法和 diff 检查通过。
+
+
+## 22. 移除独立 view_media 工具
+
+用户授权删除 `view_media`。`agent/tools.py` 删除 `VIEW_MEDIA_TOOL`、独立 `TOOLS` 注册和相机工具列表中的媒体工具，原附件函数改为内部 `_view_media()`，仍用于三张观察图片的文件校验与 URI 构造。`create_tools(camera)` 目前只返回 `camera_action`、`camera_observe`、`camera_status`、`camera_reset` 四个工具。英文 system prompt 与 README 的当前接口说明同步更新；历史媒体验证记录保留并注明工具已移除。
+
+本地附件 fixture 经 Qwen XML 解析和 Agent 循环检查通过：每次模型请求只提供四个相机工具，观察/动作/重置各自动附加三图，状态仅返回元数据，尝试调用已删除工具返回 unknown tool 错误且不影响相机。报告为 `/tmp/spatialharness-camera-only-dw4iwgx2/report.json`。语法和 diff 检查通过，未调用真实模型或 Blender。本轮没有实现此前讨论的 camera_trajectory 工具。
+
+
+## 23. camera_trajectory 轨迹工具
+
+用户授权实现此前讨论的轨迹工具。修改六个代码文件：`CameraSession` 在成功提交动作后记录位置变化，初始位置构成第一段，成功 reset 保留旧段并新开一段；失败动作与 reset 不写历史。`CameraClient` 与 worker 分发新增 `trajectory` 请求。`OverheadView` 复用一个 mesh 绘制紫红色路线与行进箭头、黄色段起点，继续显示当前相机的橙点及方向十字；按全体历史位置取景，垂直移动投影重合，不画零长箭头。`SceneRenderer.render_trajectory()` 单独保存 `<序号>_trajectory.png/json`，不覆盖 `state.json`，失败时清理输出，结束后隐藏叠加层并恢复第一视角。反复查看复用 mesh 和材质，不累积 Blender 对象。
+
+`create_tools(camera)` 现返回五个工具：camera_action、camera_observe、camera_status、camera_reset、camera_trajectory，无独立 view_media。新工具无参数，返回当前状态、轨迹段数/点数、图片路径及尺寸，并通过一条自动 user 消息附加一张 top_down_view 图片和英文说明。英文 system prompt 新增轨迹段落，说明颜色、路径箭头、reset 断线、水平投影和跨图像素坐标不可直接比较。图片预算仍为 12 张，普通观察占 3 张、轨迹图占 1 张。README 同步接口及输出说明；没有新增业务模块、改 main_env.py、导航或模型 backend/protocol。
+
+真实 Blender 进程通信 + Qwen XML 协议/Agent 循环的脚本模型检查通过，使用 221 点合成点云：初始轨迹、成功位置记录、转头/俯仰/点半径不增点、reset 分段、垂直投影、单张附件、历史越界位置取景、重复查询复用对象、查询不改状态及 state.json、普通观察像素不变、新 worker 历史独立、960/480 渲染、正常退出。注入移动和 reset 第二视角失败及轨迹记录写入失败后，状态/历史保持原值、输出清理并可继续调用。已查看两种分辨率实际轨迹图。报告为 `outputs/trajectory_check_fh7rt4cz/report.json`，示例 `0017_trajectory.png`（两段）、`480/0003_trajectory.png`；临时脚本为 `/tmp/spatialharness-trajectory-check.py` 与 `/tmp/spatialharness-trajectory-inject.py`。本轮未调用真实模型服务或 GPU 重建。
+
+
+## 24. 轨迹自动作为第四张观察图片
+
+用户选择保留干净的当前地图和独立历史轨迹地图，每次观察自动附加第四张图，取代额外 camera_trajectory 工具。`CameraSession._commit()` 先生成待提交的轨迹副本（含本次移动或 reset），传给渲染器；全部渲染与保存成功后同时提交状态和轨迹，失败保留原历史。删除 CameraSession/CameraClient 的独立 trajectory 方法、worker 分发和 camera_trajectory 工具。`SceneRenderer.render()` 统一渲染第一视角、干净俯视图、轨迹图，三张 PNG 均在 `.views/`，参考帧保持原尺寸；顶层只有原三栏拼接图。失败时四图相关新增输出全部清理。record 的 images 新增 trajectory，views/布局描述独立四图，并提供轨迹段数与点数。旧会话不迁移。
+
+每条自动 user 观察消息按 first_person_view、top_down_view、nearest_video_frame、trajectory_view 顺序包含四张图片，tool description 和英文 system prompt 已同步。普通俯视图不叠加轨迹；轨迹图包含当前最新成功动作，保留 reset 断线、黄色起点与紫红色行进箭头。无需模型主动调用轨迹工具。用户已自行将图片预算设为 4*4，本轮保留该值并更新注释，按完整消息保留最近四组四图观察，未改裁剪逻辑。main_env.py 仅更新 HELP 的文件说明。
+
+真实 Blender + CameraClient + Qwen XML 协议的脚本模型检查通过：每次观察四张附件、工具列表仅四项、轨迹及时包含新移动和 reset、纯转向不加点、垂直投影、干净/轨迹图分别保存、历史越界取景、reset 不连线、16 张预算完整组裁剪、旧 camera_trajectory 调用被拒绝、状态与历史原子回滚、第二视角/第四视角/状态写入/reset 失败后的文件清理与恢复、960/480 渲染及 worker 正常退出。模型请求图片数为 [0,4,8,12,16,16,16,16,16,16,16,16]。已查看默认尺寸的干净地图与轨迹地图。报告为 `outputs/four_views_check__y3g7yvo/report.json`，示例为 `.views/0010_w0.8_top_down.png`、`.views/0010_w0.8_trajectory.png`，三栏预览为 `0010_w0.8.png`。临时脚本为 `/tmp/spatialharness-four-views-check.py` 与 `/tmp/spatialharness-four-views-inject.py`。没有调用真实模型服务或 GPU 重建。
+
+
+## 25. 四栏人工预览与最新会话修复
+
+用户反馈看不到第四张图。检查最新真实会话 `camera_20261008_190813_940511/conversation.json`，最后一条观察消息已有四个 image_url，四个文件均存在，轨迹为 `.views/0013_j55_trajectory.png`；原因是上一轮只升级模型输入，人工拼接预览仍保留三栏。现 `stitch_views()` 拼接顺序也改为第一视角、干净俯视图、参考帧、轨迹，默认宽度 3840×960；渲染器给新的第四张图单独使用 TRAJECTORY 标题，main_env HELP 与 README 同步四栏说明。
+
+已用现有独立图片重建上述最新会话的全部 13 张拼接预览，输入图片哈希保持不变，没有改对话、状态和参考帧。示例为 `outputs/camera_20261008_190813_940511/0013_j55.png`。既有独立轨迹图片保留旧 TOP DOWN 标题，新生成的轨迹图片使用 TRAJECTORY。重建脚本为 `/tmp/spatialharness-rebuild-four-panel-previews.py`，报告 `/tmp/spatialharness-four-panel-rebuild-report.json`。真实 Blender 桥接/四图附件/完整组裁剪/失败回滚检查在 960/480 重跑通过，预览尺寸分别为 3840×960 和 1920×480；报告为 `outputs/four_panel_check_vu2b_1oe/report.json`，脚本为 `/tmp/spatialharness-four-panel-check.py`。已查看用户实际四栏预览和新轨迹标题。模型仍接收四张独立图，不接收拼接预览。
+
+
+## 26. 轨迹合入俯视图，恢复三图设置
+
+用户最终选择将 top-down 与 trajectory 合并。渲染器每次只渲染第一视角和含历史路径的俯视图，再附匹配原视频帧；删除单独 trajectory PNG、第四张附件标签和 TRAJECTORY 标题对象，人工预览恢复三栏（2880×960，480 时为 1440×480）。模型观察消息按 first_person_view、top_down_view、nearest_video_frame 附加三张独立图片，图片预算恢复 4*3=12，保留最近四组完整观察。仍只有 camera_action、camera_observe、camera_status、camera_reset 四个工具。轨迹记录、最新动作、reset 断线、失败原子回滚均保留，路径直接显示在 TOP DOWN 图中。英文提示词、工具说明、HELP 和 README 同步三图设置。
+
+真实 Blender 进程通信与脚本模型检查通过：俯视图实际含紫红色路径、三图附件/标签、12 张整组预算、最新动作和 reset 包含在地图、纯转向不加点、垂直投影、历史越界取景、第二视角/路径绘制/状态提交/reset 失败的文件清理与状态/轨迹回滚、正常退出、960/480 渲染。报告为 `outputs/merged_map_check_ck4b953z/report.json`，临时脚本为 `/tmp/spatialharness-merged-map-check.py` 与 `/tmp/spatialharness-merged-map-inject.py`。没有调用真实模型服务或 GPU 重建。
+
+已将最新真实会话 `camera_20261008_190813_940511` 的全部 13 张人工预览重新拼为三栏，中栏使用原有含历史路径的地图。独立输入图片哈希保持不变，既有对话和状态记录仍保留当时的四图格式；新运行使用三图格式。已查看最新预览 `0013_j55.png`，确认路径和方向标记同时显示。重建脚本为 `/tmp/spatialharness-rebuild-merged-previews.py`，报告为 `/tmp/spatialharness-three-panel-rebuild-report.json`。
+
+
+## 27. camera_action 恢复按键参数
+
+用户要求恢复 w/a/s/d、q/e、j/l/i/k、+/- 按键。`agent/tools.py` 的函数和 schema 改为 `camera_action(key, magnitude=None)`，删除英文动作名映射，直接调用环境的单键接口。工具描述与 `main_agent.py` 英文 system prompt 逐个解释十二个按键的意义，保留当前第一视角参照、水平移动保持高度、q/e 沿场景竖直轴、距离和角度单位、固定步长及幅度限制；README 同步参数与示例。key 只接受单个按键，幅度单独传入；不接受旧 action 参数、英文动作名、组合命令或按键串。三图设置不变。
+
+真实 Blender 合成点云与脚本模型经 Qwen XML 解析、Agent 工具执行检查通过：十二个按键的位移、朝向、俯仰和点半径变化正确，每次自动附加三图，状态与 reset 正常；十二种无效参数（旧 action、英文动作名、组合命令、按键串、大写/空键、不支持的幅度、非正/非有限幅度）均返回错误且保持状态，不附加图片。英文提示词格式化、schema、Python 语法与 diff 检查通过。报告为 `outputs/key_actions_check_j3zxcgzo/report.json`，临时脚本为 `/tmp/spatialharness-key-actions-check.py`。未调用真实模型服务或重跑 GPU 重建。
+
+
+## 28. 导航决策提示词
+
+分析真实会话 `camera_20261008_193217_140353`：一次观察后执行 39 次动作，其中水平移动 18 次、累计约 14 scene units，水平转向 17 次、累计 1015 度；工具调用无错误，最终第一视角确实对着马桶。主要问题为路线与入口假设反复改变、地图与按键解释不稳定、参考帧通道被用于当前导航、近处遮挡后原地转向和增大点半径。
+
+用户授权按讨论方案修改 `main_agent.py` 的英文 SYSTEM_PROMPT。用 Evidence from the views 明确三视角用途和参考通道需要当前观察确认；增加 Navigation planning、Action and verification、Recovery、Completion 分段。要求短路线和当前路标、动作前英文简述目的与预期、动作后验证、连续三步无进展且无新信息时重新规划、贴近表面完全遮挡时先退回清晰位置、避免无依据的反向转头与重复路线、不推算未标定的世界坐标/地图距离、j/l 弧线只表示旋转、满足最终第一视角条件后停止多余调整。保留原视角说明、工具工作流、第一视角参照及按键单位，通用空间问答仍按证据回答。不改工具、图片设置、模型参数或 Agent 循环。
+
+Python AST 语法检查、纯英文检查、分段和四个格式占位符检查、米制/相对单位两种填充模式及 diff 检查通过。本轮未重跑模型导航，实际动作效率改善仍需新会话验证；运行中的 Agent 不会自动更新既有 system message，重启 `main_agent.py` 后使用新提示词。

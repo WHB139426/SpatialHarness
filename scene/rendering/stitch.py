@@ -16,11 +16,12 @@ def stitch_views(first_path, overhead_path, reference_path, output_path):
             images.append(bpy.data.images.load(str(path), check_existing=False))
         first, overhead, reference, first_label, reference_label = images
         width, height = overhead.size
-        output_row = width * 12
+        output_width = width * 3
+        output_row = output_width * 4
         reference_scale = min(width / reference.size[0], height / reference.size[1])
         reference.scale(max(1, round(reference.size[0] * reference_scale)),
                         max(1, round(reference.size[1] * reference_scale)))
-        combined_pixels = array('f', (0.02, 0.02, 0.02, 1.0)) * (width * 3 * height)
+        combined_pixels = array('f', (0.02, 0.02, 0.02, 1.0)) * (output_width * height)
 
         def paste(image, x, y):
             image_width, image_height = image.size
@@ -45,8 +46,8 @@ def stitch_views(first_path, overhead_path, reference_path, output_path):
             label_y = height - label.size[1] - max(1, round(height * .02))
             paste(label, label_x, label_y)
 
-        combined = bpy.data.images.new('First-person, overhead, and video frame',
-                                       width=width * 3, height=height, alpha=True)
+        combined = bpy.data.images.new('First-person, map with trajectory, and video frame',
+                                       width=output_width, height=height, alpha=True)
         images.append(combined)
         combined.pixels.foreach_set(combined_pixels)
         combined.filepath_raw = str(output_path)

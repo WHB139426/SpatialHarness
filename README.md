@@ -19,7 +19,7 @@ scene/
     session.py           # 相机状态、动作执行、重置与失败回滚
     bridge.py            # 普通 Python 与 Blender 的 JSON 通信
   rendering/
-    renderer.py          # 场景初始化、三栏渲染与观察结果保存
+    renderer.py          # 场景初始化、三图渲染与观察结果保存
     scene.py             # 点云导入、材质、地面估计、内参和初始相机位姿
     views.py             # 俯瞰视图、位置朝向标记、准星和文字标签
     reference_frame.py   # 最近原视频帧匹配
@@ -30,7 +30,7 @@ assets/                  # 字体与标签图片
 
 修改动作解析或移动方式看 `scene/camera_control/`，修改图片显示看 `scene/rendering/`，修改抽帧和重建看 `scene/reconstruction/`。调用关系为 `main_env.py` → `CameraSession` → `SceneRenderer`：相机会话执行动作并维护状态，渲染器根据当前位姿生成观察结果，终端交互调用会话方法。重建结果通过 PLY、相机 JSON 和抽帧文件传给查看器。
 
-`CameraSession` 提供 `observe()`、`execute(key, magnitude=None)`、`status()` 和 `reset()`。观察、动作和重置返回包含图片路径与相机状态的记录；状态查询只返回相机状态。动作成功生成观察结果后才提交状态，失败时恢复之前的相机位姿。
+`CameraSession` 提供 `observe()`、`execute(key, magnitude=None)`、`status()` 和 `reset()`。观察、动作和重置返回三张独立图片路径与相机状态的记录；状态查询只返回相机状态。俯视图内的轨迹包含本次动作后的最新位置；全部图片和记录成功保存后才提交状态和移动历史，失败时恢复之前的相机位姿与历史。
 
 环境默认配置在 `main_env.py` 顶部，agent 默认配置在 `main_agent.py` 顶部。初始相机位姿由场景初始化计算，并作为位置和方向传给 `CameraSession`；会话负责动作和状态，不计算地面或眼高。
 
@@ -44,32 +44,48 @@ agent/
   types.py               # Model/ChatProtocol 类型约定、ModelInput、Tool、ToolOutput
   backend.py             # vLLM 服务请求，不加载本地模型权重
   protocols/qwen.py      # Qwen 模板参数、thinking 和 XML 工具调用解析
-  tools.py               # view_media 和绑定 CameraClient 的相机工具
+  tools.py               # 相机工具和内部媒体附件构造
 ```
 
-`Agent` 接收 backend、protocol、工具列表及显式配置，`run(prompt)` 持续执行模型与工具调用直至返回回答；`prompt` 可以是文本或多模态内容列表。工具可以通过 `ToolOutput.messages` 附加视觉观察。独立的 `TOOLS` 仅含 `view_media`；`create_tools(camera)` 返回绑定一个运行中 `CameraClient` 的五个工具：
+`Agent` 接收 backend、protocol、工具列表及显式配置，`run(prompt)` 持续执行模型与工具调用直至返回回答；`prompt` 可以是文本或多模态内容列表。工具可以通过 `ToolOutput.messages` 附加视觉观察。`create_tools(camera)` 返回绑定一个运行中 `CameraClient` 的四个工具：
 
 | 工具 | 参数与行为 |
 | --- | --- |
-| `view_media` | `path`：附加本地图片或视频 |
 | `camera_action` | `key` 和可选 `magnitude`：执行一步动作，返回完整观察记录并自动附加三张独立图片 |
 | `camera_observe` | 无参数：渲染当前位姿，返回观察记录与三张独立图片 |
 | `camera_status` | 无参数：只返回相机状态，不渲染 |
 | `camera_reset` | 无参数：恢复初始位姿和点半径，返回观察记录与三张独立图片 |
 
-`key` 支持 `wasdqeijkl+-`。`magnitude` 只用于 WASD 移动距离和 IJKL 转角，单位沿用环境，省略时使用配置步长。动作结果已经附加图片，无需再调用 `view_media` 查看同一张观察图。`create_tools(camera)` 不启动或关闭 worker，生命周期由调用方管理；工具列表没有 coding、shell、搜索或关闭相机工具。向 `Agent` 传入 `tools=create_tools(camera)` 即可使用这一组工具。
+`key` 使用单个相机按键，与环境键盘和俯视图标记一致：
+
+| 按键 | 含义 |
+| --- | --- |
+| w / s | 前进 / 后退 |
+| a / d | 向左 / 向右平移 |
+| q / e | 下降 / 上升 |
+| j / l | 向左 / 向右转头 |
+| i / k | 抬头 / 低头 |
+| + / - | 增大 / 减小渲染点半径 |
+
+例如 `camera_action(key="w", magnitude=0.5)` 或 `camera_action(key="j", magnitude=30)`。`key` 只能是单个按键，幅度单独传入，不能写成 `w0.5` 或按键串。所有方向按当前第一视角相机理解：水平移动沿当前水平朝向并保持高度，q/e 沿场景竖直轴移动，均不受俯仰影响。`magnitude` 只用于 w/s/a/d 的距离和 j/l/i/k 的角度，单位沿用环境，省略时使用配置步长；q/e 与 +/- 使用固定步长，不接受 `magnitude`。动作结果已经附加图片，模型直接查看即可。`create_tools(camera)` 不启动或关闭 worker，生命周期由调用方管理；工具列表没有 coding、shell、搜索或关闭相机工具。向 `Agent` 传入 `tools=create_tools(camera)` 即可使用这一组工具。
 
 构造时由调用方传入系统提示词、最大步骤数和图片保留数量（`-1` 表示不限制）；默认不写文件。提供 `conversation_path` 时保存当前对话 JSON，新建 agent 从新对话开始，不自动恢复旧记录。`reset()` 仅重置 agent 消息历史，与相机重置无关。图片历史限制不处理视频附件。
 
-相机观察在一条消息中按 `first_person_view`、`top_down_view`、`nearest_video_frame` 的顺序附加三张图片，使用英文开闭标签和说明。图片由模型服务分别预处理，三栏拼接 PNG 只供人工查看，不自动附加给模型。历史裁剪按整条消息中的图片一起处理，保留其他文字，不会拆散一组三图观察。
+相机观察在一条自动 user 消息中按 `first_person_view`、`top_down_view`、`nearest_video_frame` 的顺序附加三张图片，使用英文开闭标签和说明。它们分别为当前第一视角、叠加移动历史的当前俯视图、匹配参考视频帧，由模型服务分别预处理。人工查看的拼接 PNG 按相同顺序展示三栏，不自动附加给模型。历史裁剪按整条消息中的三张图片一起处理，保留其他文字，不会拆散一组观察。
 
-三图输入已通过真实 `qwen3.8-flash-next` + Blender 检查：使用合成点云 fixture 和默认视频的原始帧，两张渲染图为 960×960，参考帧为 640×480；三次问答覆盖转向、重置、状态查询及超过四组观察后的完整组裁剪。记录在 [report.json](outputs/three_image_live_d286ldmy/report.json)。渲染和状态保存失败时的文件清理、状态回滚另通过 [Blender 检查](outputs/three_image_check_of8rnicj/report.json)。本轮没有重跑 GPU 重建，也未评估拆图后的空间推理精度提升。
+`top_down_view` 直接叠加本次会话的移动历史，无需第四张图片或额外工具调用：紫红色线与箭头表示移动路径及行进方向，黄色点表示各段起点，现有橙点与十字表示当前位置和朝向。只记录成功的位置变化，转头、观察和点半径调整不新增位置；`camera_reset` 保留旧轨迹并开始新段，不连接重置前后位置。俯视投影不显示高度变化。为包含所有历史位置，俯视图的范围可能随观察变化，不能直接跨图比较像素坐标。旧的 `camera_trajectory` 工具与独立通信请求已移除。
+
+此前三图版本已通过真实 `qwen3.8-flash-next` + Blender 检查：使用合成点云 fixture 和默认视频的原始帧，两张渲染图为 960×960，参考帧为 640×480；三次问答覆盖转向、重置、状态查询及超过四组观察后的完整组裁剪。记录在 [report.json](outputs/three_image_live_d286ldmy/report.json)。渲染和状态保存失败时的文件清理、状态回滚另通过 [Blender 检查](outputs/three_image_check_of8rnicj/report.json)。本轮没有重跑 GPU 重建，也未评估拆图后的空间推理精度提升。
+
+此前四图版本已通过真实 Blender 通信与脚本模型的 Qwen 协议检查：包含最新动作的轨迹图、独立干净地图、reset 分段、完整四图附件、16 张预算整组裁剪，以及任一视角或状态保存失败后的回滚。报告为 [report.json](outputs/four_views_check__y3g7yvo/report.json)。本轮未调用真实模型服务或重跑 GPU 重建。
+
+当前合并轨迹的三图版本已通过真实 Blender 与脚本模型检查：俯视图包含最新路径，三图附件和 12 张预算完整组裁剪正确，reset 分段、垂直投影、失败回滚及 960/480 渲染正常。报告为 [report.json](outputs/merged_map_check_ck4b953z/report.json)。
 
 `VLLMBackend` 的模型名称、服务地址和生成参数由调用方传入。它沿用原仓库的原始工具调用文本方式：服务端不要启用自动工具调用解析，工具文本由 protocol 解析。Qwen protocol 目前支持原仓库 Qwen3.8 使用的 `<tool_call><function=...><parameter=...>` 格式，不代表所有 Qwen 模型都使用同一格式。本地媒体通过 `file://` URI 传递，推理服务需要能访问这些文件并允许读取相应目录。
 
 backend 负责服务接口，protocol 负责模型消息与输出格式。以后添加模型时可以替换这两个实现，复用循环和工具。`main_agent.py` 已组装 agent 与相机工具，原 `main_env.py` 保留手动相机交互。
 
-已用本机 vLLM 的 `qwen3.8-27b` 完成真实文本问答、三栏观察图与 4 秒视频验证；图片和视频均通过 `view_media` 调用后进入模型请求，再返回回答。验证记录在 [report.json](outputs/agent_check_t0hsnr74/report.json)。这项验证不包含相机控制或 Blender 通信。
+此前迁入阶段使用本机 vLLM 的 `qwen3.8-27b` 完成真实文本问答、三栏观察图与 4 秒视频验证，当时通过独立 `view_media` 工具附加媒体；该工具现已移除，当前相机 agent 通过相机工具自动获取观察图片。验证记录在 [report.json](outputs/agent_check_t0hsnr74/report.json)。这项验证不包含相机控制或 Blender 通信。
 
 ## 启动 agent 空间问答
 
@@ -81,14 +97,14 @@ PYTHONDONTWRITEBYTECODE=1 /home/hw139426/workspace/miniconda3/envs/spatial_agent
 
 入口先在子进程中从视频重建，成功后释放重建进程，再启动 Blender worker 和 agent。在 `agent>` 后输入空间问题，例如“床在当前朝向的哪一侧？请转头确认”。模型按需观察和移动；每步观察自动回传图片。同一个 agent 和 worker 连续处理提问，输入 `/exit`、`quit`、`exit` 或终端 EOF 可退出；会话关闭时释放 Blender 和模型客户端。
 
-模型当前使用用户选定的 `qwen3.8-flash-next`、`http://127.0.0.1:8000/v1`，生成上限 8192 tokens，最多 100 次模型调用/提问，图片预算为 12 张，可容纳最近四组三图相机观察。模型参数、thinking 设置、服务超时和 system prompt 直接在 `main_agent.py` 顶部修改。环境参数复用 `main_env.py` 的解析器，例如：
+模型当前使用用户选定的 `qwen3.8-flash-next`、`http://127.0.0.1:8000/v1`，生成上限 8192 tokens，最多 100 次模型调用/提问，图片预算为 12 张，可保留最近四组完整的三图观察。模型参数、thinking 设置、服务超时和 system prompt 直接在 `main_agent.py` 顶部修改。环境参数复用 `main_env.py` 的解析器，例如：
 
 ```bash
 python main_agent.py --video /path/to/video.mp4 --resolution 480 --samples 4
 python main_agent.py --help
 ```
 
-每次运行创建新的 `outputs/camera_<时间戳>/`，保存重建、观察 PNG/JSON、`state.json`、`render.log` 和 `conversation.json`。会话顶层的 PNG 只保留拼接预览；agent 使用的独立第一人称图和俯视图放在 `.views/` 子目录，参考帧仍在 `reconstruction/` 中。不自动恢复旧会话。默认 Metric 开启时移动距离近似为米；使用 `--metric-weights none` 时提示词会说明距离是 VGGT 相对单位。转角单位为度，yaw 使用场景参考轴，不代表地理方位。agent 只获得相机与媒体工具。
+每次运行创建新的 `outputs/camera_<时间戳>/`，保存重建、观察 PNG/JSON、`state.json`、`render.log` 和 `conversation.json`。会话顶层的 PNG 只保存三栏拼接预览；agent 使用的独立第一人称图和含轨迹的俯视图放在 `.views/` 子目录，参考帧仍在 `reconstruction/` 中。不自动恢复旧会话。默认 Metric 开启时移动距离近似为米；使用 `--metric-weights none` 时提示词会说明距离是 VGGT 相对单位。转角单位为度，yaw 使用场景参考轴，不代表地理方位。agent 只获得上述四个相机工具。
 
 新入口已通过子进程重建 fixture + 真实 Qwen/Blender 的连续两次提问、移动、重置和退出检查，也通过失败及中断清理检查，记录在 [report.json](outputs/agent_entry_check_29adu93o/report.json)。验证覆盖工具闭环和资源清理，不代表空间推理精度验证。完整视频的 GPU 重建沿用原实现，本轮没有重跑。入口最初新增时保留了原环境入口；现在两个入口已统一命名为 `main_env.py` 和 `main_agent.py`。
 
@@ -96,7 +112,7 @@ python main_agent.py --help
 
 `scene.camera_control.bridge.CameraClient` 可以在普通 Python 中启动并控制持续运行的 Blender worker，不需要导入 `bpy`。它接收完整的 worker 启动命令、日志路径和超时时间；场景初始化完成后，`initial_state` 保存初始状态，此时尚未渲染。
 
-客户端提供 `observe()`、`execute(key, magnitude=None)`、`status()`、`reset()` 和 `close()`。前四项对应现有 `CameraSession` 方法；观察、动作和重置返回含 PNG 路径的完整记录，状态查询不渲染。使用 `with` 会在结束时关闭子进程。相机动作仍是一项按键动作，例如 `execute('w', 0.5)`，不接收组合命令字符串。
+客户端提供 `observe()`、`execute(key, magnitude=None)`、`status()`、`reset()` 和 `close()`。前四项对应 `CameraSession` 方法；观察、动作和重置返回三图观察记录，状态查询不渲染。使用 `with` 会在结束时关闭子进程。相机动作仍是一项按键动作，例如 `execute('w', 0.5)`，不接收组合命令字符串。
 
 Blender worker 仍运行 `main_env.py`。客户端自动追加隐藏参数 `--response-fd`，让内部 `--worker` 分支进入 JSON 循环；请求通过标准输入发送，响应走独立的继承管道，Blender 标准输出与错误输出写入日志。协议为同步串行的逐行 JSON，请求形如 `{"op": "execute", "params": {"key": "w", "magnitude": 0.5}}`；响应包含 `ok`，成功时有 `result`，失败时有 `error`。动作错误可继续请求；通信超时或管道断开会关闭 worker，避免错配后续响应。超时默认配置 `CAMERA_TIMEOUT = 300` 放在 `main_env.py` 顶部，由调用方传入客户端。
 
@@ -200,7 +216,7 @@ reset
 quit
 ```
 
-每次操作都会渲染第一人称和俯瞰视角，并把匹配的原视频帧拼成一张三栏 PNG：左侧 “FIRST PERSON” 是带准星的第一人称画面；中间 “TOP DOWN” 是正交俯瞰图；右侧 “NEAREST VIDEO FRAME” 是位置和朝向最接近的原视频抽帧，保持原始宽高比并留黑边，不裁切。英文标签使用项目自带的 [DejaVu Sans 字体](assets/fonts/DejaVuSans-Bold.ttf)（[许可证](assets/fonts/LICENSE.txt)），不依赖系统字体路径。俯瞰图中的橙色圆点标示当前相机位置，三短一长的十字标示 WASD 水平移动方向：蓝色长臂 `w` 带箭头指向前方，短臂 `a/s/d` 分别向左、后、右。绿色弧形箭头表示 `j` 向左转（俯视图逆时针）、`l` 向右转（顺时针）。十字和弧线随相机转向，六个字母保持正立并带深色底，低分辨率时设置最小显示尺寸。标记只表达方向，不代表移动距离或转角大小。所有按键控制同一台第一人称相机，左侧和中间画面同步更新，右侧根据当前相机姿态重新匹配。俯瞰图只显示水平朝向；`i/k` 改变的俯仰角可从左侧画面看到。
+每次操作都会保存三栏 PNG：第一栏 “FIRST PERSON” 是带准星的第一人称画面；第二栏 “TOP DOWN” 显示当前位置、朝向及本次会话的历史移动路径；第三栏 “NEAREST VIDEO FRAME” 是位置和朝向最接近的原视频抽帧，保持原始宽高比并留黑边，不裁切。英文标签使用项目自带的 [DejaVu Sans 字体](assets/fonts/DejaVuSans-Bold.ttf)（[许可证](assets/fonts/LICENSE.txt)），不依赖系统字体路径。俯瞰图中的橙色圆点标示当前相机位置，三短一长的十字标示 WASD 水平移动方向：蓝色长臂 `w` 带箭头指向前方，短臂 `a/s/d` 分别向左、后、右。绿色弧形箭头表示 `j` 向左转（俯视图逆时针）、`l` 向右转（顺时针）。十字和弧线随相机转向，六个字母保持正立并带深色底，低分辨率时设置最小显示尺寸。标记只表达方向，不代表移动距离或转角大小。所有按键控制同一台第一人称相机，第一、第二栏随当前状态同步更新，第三栏根据当前相机姿态重新匹配。俯瞰图只显示水平朝向；`i/k` 改变的俯仰角可从左侧画面看到。
 
 每次渲染后还会从本次重建的 `vggt_cameras.json` 中查找位置和镜头朝向最接近的原视频抽帧。终端打印该 JPG 路径、位置距离和朝向夹角；同名渲染 JSON 的 `nearest_frame` 字段也记录这些信息。匹配分数为 `(位置距离 / 0.5)^2 + (朝向夹角 / 20°)^2`；只比较位置与镜头朝向，不使用内参或画面内容。最近帧可能仍与当前视角相差很大，因此请同时查看距离和夹角。
 
@@ -245,13 +261,13 @@ python main_env.py --up 0 -1 0
 - `state.json`：最近一次成功渲染的第一人称相机位置与朝向；重新启动时仍从场景内的初始视点开始。
 - `render.log`：Blender 导入和渲染日志。
 
-拼接图的左侧中央显示小型白色十字准星（黑色描边），中间俯瞰图显示相机的地图位置与水平朝向。两张 Blender 临时渲染图仅用于拼接，完成后会自动删除；原视频抽帧仍保存在 `reconstruction/frames/`。
+拼接图的第一栏中央显示小型白色十字准星（黑色描边），第二栏同时显示当前地图与历史轨迹。两张独立 Blender 渲染图保存在 `.views/`，供模型分别编码；原视频抽帧仍保存在 `reconstruction/frames/`。
 
 在 VS Code Remote SSH 中打开对应 PNG 即可查看；普通 SSH 终端不会自动显示图片，也可以下载到本地查看。
 
 ## 渲染参数
 
-`main_env.py` 顶部的 `RESOLUTION = 960` 控制第一人称图和俯视图的默认边长，均直接渲染为 960×960；`--resolution` 可以覆盖它，两个入口共用此默认值。agent 收到两张独立渲染图和未经缩放的原视频帧，当前默认视频帧为 640×480。它们的实际编码尺寸由模型服务的预处理配置决定。人工预览仍将原视频帧保持宽高比、居中放入第三栏并可能留黑边，最终 PNG 为 2880×960；Blender 每个视角的采样数为 16。VGGT 内参来自预处理后的图像，是模型估计值，和原视频帧的像素对齐只可视为近似。快速预览示例：
+`main_env.py` 顶部的 `RESOLUTION = 960` 控制第一人称图和含轨迹俯视图的默认边长，均直接渲染为 960×960；`--resolution` 可以覆盖它，两个入口共用此默认值。agent 收到两张独立渲染图和未经缩放的原视频帧，当前默认视频帧为 640×480。它们的实际编码尺寸由模型服务的预处理配置决定。人工预览仍将原视频帧保持宽高比、居中放入第三栏并可能留黑边，最终三栏 PNG 为 2880×960；Blender 每个视角的采样数为 16。VGGT 内参来自预处理后的图像，是模型估计值，和原视频帧的像素对齐只可视为近似。快速预览示例：
 
 ```bash
 python main_env.py --resolution 480 --samples 4

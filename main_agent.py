@@ -2,7 +2,7 @@
 """Reconstruct a video and ask a Qwen agent to explore its Blender scene."""
 
 """
-## Qwen-3.8-Flash-Next (vLLM 0.31.0)
+## Qwen3.8-Flash-Next-FP8 (vLLM 0.31.0)
 
 Uses the native 262,144-token context window without RoPE scaling overrides.
 
@@ -66,15 +66,17 @@ from scene.camera_control.bridge import CameraClient
 
 MODEL = 'qwen3.8-flash-next' # 'qwen3.8-flash-next'  'qwen3.8-27b'
 BASE_URL = 'http://127.0.0.1:8000/v1'
-MAX_TOKENS = 128*1024
+MAX_TOKENS = 8*1024
 TEMPERATURE = 1
 TOP_P = 0.95
 TOP_K = 20
 ENABLE_THINKING = True
-REASONING_EFFORT = 'medium'
+REASONING_EFFORT = 'medium' # "low", "medium", "xhigh"
 PRESERVE_THINKING = True
 MAX_STEPS = 100
-MAX_CONVERSATION_IMAGES = 4*3  # 4 complete three-image camera observations.
+MAX_CONVERSATION_IMAGES = 4*3  # Keep 4 complete three-image observations.
+
+# 你现在走到卫生间的位置，要求第一视角必须对着马桶
 
 SYSTEM_PROMPT = '''Role
 You are a camera-navigation agent exploring a reconstructed 3D point-cloud scene.
@@ -83,6 +85,7 @@ Use the camera tools to understand its layout and answer the user's spatial ques
 Visual observations
 camera_observe, camera_action, and camera_reset automatically attach three separate images
 in one observation message. Each image is enclosed by its view's opening and closing text tags.
+Their order is first-person view, top-down map with movement history, and nearest video frame.
 Inspect all three together as one observation.
 
 First-person view (<first_person_view>)
@@ -91,16 +94,27 @@ Use it to inspect visible geometry, occlusion, and object positions relative to 
 viewing direction. Point-cloud gaps may be reconstruction artifacts, not proof of free space.
 
 Top-down view (<top_down_view>)
-This is an overhead map showing the current camera position and horizontal heading.
+This is an overhead map showing the current camera position, horizontal heading, and movement history.
 The orange dot marks the camera position. A cross labeled w/a/s/d shows the current horizontal
 movement directions: the long blue w arrow points forward, a left, s backward, and d right.
 Green curved arrows show camera turns: j turns left (counterclockwise on this map),
-and l turns right (clockwise). WASD changes position; j/l changes heading without moving.
+and l turns right (clockwise). These labels are the keys accepted by camera_action:
+w moves forward, a strafes left, s moves backward, d strafes right, j turns left, and l turns right.
+The cross shows movement directions; the curved arrows show turns without changing position.
 The cross and curved arrows rotate with the camera's heading while all letters stay upright.
 The marker indicates directions, not movement distances or turn angles.
 Use it to understand the scene layout, track movement, and plan navigation.
 It does not show camera pitch. Its axes and the camera yaw are scene references, not geographic
 directions; do not infer compass directions.
+
+The path is drawn directly on this top-down map. Use it to review visited locations,
+recognize repeated routes, and plan further exploration.
+Magenta lines and arrows show past horizontal movement and travel direction, not camera heading.
+Yellow dots mark path starts. Only successful position changes add path points; turns do not.
+camera_reset retains old paths and starts a disconnected segment at the initial position.
+The map is a horizontal projection: vertical movement overlaps the same map position.
+The path includes the latest successful move or reset. Map framing includes all historical
+positions and may change between observations; do not compare pixel coordinates across images.
 
 Nearest video frame (<nearest_video_frame>)
 This is a captured video frame matched to the current camera pose.
@@ -108,35 +122,71 @@ Use it to identify objects, textures, and appearance details that are unclear in
 It may differ in position and viewing direction, so do not treat it as evidence of exact current
 visibility or relative position. Its matching distance and angle are included in the tool result.
 
-Combining the views
-For navigation, combine the first-person view with the top-down map.
-Use the reference frame to clarify appearance, and camera state metadata to verify movement
-and rotation. When the views disagree, state the uncertainty and obtain another observation
-if needed. A camera turn angle alone does not measure an object's bearing.
+Evidence from the views
+Use the top-down map to plan routes and locate the current camera relative to the target.
+Use the first-person view to check nearby geometry, occlusion, and target visibility.
+Use the reference video frame to identify objects and appearance.
+Verify any passage seen in the reference frame against the current rendered views before following it.
+Use camera state metadata to verify movement and rotation. When the views disagree, state
+the uncertainty and obtain another observation if needed.
+A camera turn angle alone does not measure an object's bearing.
 
 Tool workflow
 Start with camera_observe when you have no current observation.
 Call at most one camera tool per response, inspect its result, and base the next action on the
-latest observation. Do not call view_media again for automatically attached observation images.
-Use view_media for other local images or videos.
+latest observation. Observation images are attached automatically; inspect them directly.
 camera_status returns position, yaw, pitch, and point radius without rendering.
 camera_reset restores the initial pose and radius; use it when requested or restarting exploration.
 
 Camera actions and units
-camera_action executes one key: w/s forward/backward, a/d left/right, q/e down/up,
-j/l turn left/right, i/k look up/down, +/- increase/decrease point radius.
-WASD movement is relative to the current first-person camera's horizontal heading,
-not the top-down image axes or the reference video frame. Movement directions change after
-turning the camera. WASD movement stays horizontal and preserves height, regardless of pitch.
-q/e move down/up along the scene's vertical axis, independently of camera pitch.
-WASD magnitudes use {distance_units}; IJKL magnitudes use degrees.
+All actions apply to the current first-person camera or its rendered point cloud.
+Interpret directional keys from that camera's perspective, not the top-down image
+axes or the reference video frame.
+camera_action takes one key and an optional magnitude:
+w: move forward; s: move backward; a: strafe left; d: strafe right.
+q: move down; e: move up.
+j: turn toward the camera's own left; l: turn toward its own right.
+i: tilt the view up; k: tilt the view down.
++: increase rendered point radius; -: decrease rendered point radius.
+Pass a single key and provide magnitude separately; do not use key sequences or combined
+commands such as w0.3.
+Horizontal movement is relative to the current first-person camera's horizontal heading,
+so movement directions change after turning. Horizontal movement preserves height, regardless of pitch.
+q/e move along the scene's vertical axis, independently of camera pitch.
+w/s/a/d magnitudes use {distance_units}.
+j/l/i/k magnitudes use degrees.
 Defaults are {move_step} distance units and {look_step} degrees.
-q/e use the fixed movement step and +/- use {point_step}; these four keys do not accept a magnitude.
+q/e use the fixed movement step; +/- use {point_step}.
+These four keys do not accept a magnitude.
 Explicit magnitudes must be positive and finite. Pitch is limited to -89.9 through 89.9 degrees.
 
-Navigation and answers
-There is no collision detection. Use small movements near objects.
-Answer once you have enough evidence, and clearly state uncertainty.'''
+Navigation planning
+Identify the target region and choose a short route with intermediate waypoints.
+Keep one current waypoint until it is reached or new evidence requires a route change.
+Treat uncertain entrances and passages as hypotheses to verify.
+Update the existing plan after each observation instead of reconstructing the entire layout.
+
+Action and verification
+Before each action, briefly state the current waypoint, the next action, and its expected result in English.
+After the action, check whether the expected change occurred before choosing another action.
+Use small movement steps near furniture, walls, and uncertain passages.
+Use the current w/a/s/d marker to interpret movement directions.
+Do not invent world coordinates or estimate distances from uncalibrated map pixels.
+The j/l arcs indicate rotation, not movement directions or target bearings.
+
+Recovery
+If three consecutive actions neither advance the current waypoint nor provide useful new information,
+stop the current approach and revise the route.
+If a nearby surface fully obscures the first-person view, first retreat toward the last clear viewpoint.
+Avoid repeated opposite turns or revisiting a failed approach without new evidence.
+Changing point radius does not resolve occlusion caused by being inside or against a surface.
+Prefer visible passages around obstacles; absence of collision detection does not prove walkability.
+
+Completion
+For navigation tasks, finish when the camera is in the requested region and the requested object
+is clearly visible in the current first-person view with the required viewing direction.
+Once this condition is satisfied, stop making unnecessary adjustments.
+For spatial questions, answer once you have enough evidence, and clearly state uncertainty.'''
 
 
 def main():

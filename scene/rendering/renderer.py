@@ -1,4 +1,4 @@
-"""Render separate camera views and a three-panel preview."""
+"""Render three separate observation images and a three-panel preview."""
 
 import contextlib
 import copy
@@ -78,12 +78,12 @@ class SceneRenderer:
     def _forward(self):
         return self.camera.rotation_euler.to_matrix() @ Vector((0, 0, -1))
 
-    def _select_view(self, mode):
+    def _select_view(self, mode, history=()):
         overhead = mode == 'overhead'
         if overhead:
             self.scene.render.resolution_y = self.args.resolution
             self.scene.render.pixel_aspect_y = 1.0
-            self.overhead.update(self.camera.location.copy(), self._forward())
+            self.overhead.update(self.camera.location.copy(), self._forward(), history)
             self.overhead_label.update(self.overhead.camera.data.ortho_scale, .05)
             self.scene.camera = self.overhead.camera
         else:
@@ -93,8 +93,9 @@ class SceneRenderer:
         self._show(self.overhead.marker, overhead)
         self._show(self.crosshair, not overhead)
         self._show(self.overhead_label.root, overhead)
+        self.overhead.trajectory.hide_render = True
 
-    def render(self, state, command):
+    def render(self, state, command, segments):
         """Capture the current pose and return its saved observation record."""
         forward = self._forward()
         match = nearest_frame(self.cameras, self.cameras_path, self.camera.location, forward)
@@ -108,23 +109,30 @@ class SceneRenderer:
         record_path = image_path.with_suffix('.json')
         state_path = self.output / 'state.json'
         temporary_state = state_path.with_suffix('.json.tmp')
-        print('Rendering first-person, overhead, and nearest video frame...', flush=True)
+        print('Rendering first-person and top-down with trajectory; matching the reference frame...', flush=True)
         try:
             with render_log(self.log_path):
                 for mode, path in (('first_person', first_path), ('overhead', overhead_path)):
-                    self._select_view(mode)
+                    if mode == 'overhead':
+                        positions = [position for segment in segments for position in segment]
+                        self._select_view('overhead', positions)
+                        self.overhead.draw_trajectory(segments)
+                    else:
+                        self._select_view(mode)
                     bpy.context.view_layer.update()
                     self.scene.render.filepath = str(path)
                     bpy.ops.render.render(write_still=True)
                 stitch_views(first_path, overhead_path, match['image_path'], image_path)
             record = {
-                'command': command, 'views': ['first_person', 'overhead', 'nearest_video_frame'],
-                'layout': 'three_columns', 'state': copy.deepcopy(state),
+                'command': command, 'views': ['first_person', 'top_down', 'nearest_video_frame'],
+                'layout': 'separate_images', 'state': copy.deepcopy(state),
                 'camera_position': list(self.camera.location), 'camera_forward': list(forward),
                 'lens_mm': self.camera.data.lens, 'intrinsics': self.intrinsics, 'nearest_frame': match,
                 'image': str(image_path), 'input': str(self.source),
                 'images': {'first_person': str(first_path), 'top_down': str(overhead_path),
                            'nearest_video_frame': match['image_path']},
+                'trajectory': {'segment_count': len(segments),
+                               'position_count': sum(len(segment) for segment in segments)},
             }
             serialized = json.dumps(record, indent=2)
             record_path.write_text(serialized, encoding='utf-8')

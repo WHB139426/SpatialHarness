@@ -1,4 +1,4 @@
-"""Media viewing and camera tools bound to a running camera client."""
+"""Camera tools and internal media attachments for a running camera client."""
 
 import mimetypes
 from pathlib import Path
@@ -6,7 +6,7 @@ from pathlib import Path
 from .types import Tool, ToolOutput
 
 
-def view_media(path: str) -> ToolOutput:
+def _view_media(path: str) -> ToolOutput:
     media_path = Path(path).expanduser().resolve(strict=True)
     if not media_path.is_file():
         raise ValueError(f"media path is not a file: {media_path}")
@@ -26,65 +26,61 @@ def view_media(path: str) -> ToolOutput:
     )
 
 
-VIEW_MEDIA_TOOL = Tool(
-    name="view_media",
-    description="View a local image or video with the model's visual capability.",
-    parameters={
-        "type": "object",
-        "properties": {"path": {"type": "string", "description": "Local image or video path."}},
-        "required": ["path"],
-        "additionalProperties": False,
-    },
-    function=view_media,
-)
-
-TOOLS = [VIEW_MEDIA_TOOL]
-
-
 def _observation(record) -> ToolOutput:
     content = []
     for view, tag in (('first_person', 'first_person_view'), ('top_down', 'top_down_view'),
                       ('nearest_video_frame', 'nearest_video_frame')):
         content.append({'type': 'text', 'text': f'<{tag}>'})
-        content.extend(view_media(record['images'][view]).messages[0]['content'])
+        content.extend(_view_media(record['images'][view]).messages[0]['content'])
         content.append({'type': 'text', 'text': f'</{tag}>'})
     content.append({'type': 'text', 'text': (
         'The first-person and top-down images show the current camera state. '
         'The nearest video frame is a captured reference matched to the current camera pose; '
-        'it is not an exact view from the current camera.'
+        'it is not an exact view from the current camera. '
+        'The top-down map also shows this session\'s movement history. '
+        'Magenta lines and arrows show horizontal travel; yellow dots mark path starts. '
+        'Reset starts a disconnected segment. Map framing includes all historical positions and may change between observations.'
     )})
     return ToolOutput(value=record, messages=({'role': 'user', 'content': content},))
 
 
 def create_tools(camera) -> list[Tool]:
     """Bind environment tools to one CameraClient without owning its lifecycle."""
-    def action(key: str, magnitude: float | None = None) -> ToolOutput:
+    def camera_action(key: str, magnitude: float | None = None) -> ToolOutput:
         return _observation(camera.execute(key, magnitude))
 
     no_arguments = {'type': 'object', 'properties': {}, 'additionalProperties': False}
     return [
-        VIEW_MEDIA_TOOL,
         Tool(
             name='camera_action',
             description=(
-                'Execute one camera action and return the updated state and three separate view images. '
-                'w/s: forward/back; a/d: left/right; q/e: down/up; '
-                'j/l: turn left/right; i/k: look up/down; +/-: increase/decrease point radius. '
-                "WASD movement is relative to the current first-person camera's horizontal heading, "
-                'not the top-down image axes or the reference video frame. Directions change after '
-                'turning the camera. WASD movement stays horizontal and preserves height, regardless '
-                "of pitch. q/e move along the scene's vertical axis, independently of camera pitch."
+                'Execute one camera action and return the updated state and three separate images: '
+                'first-person view, top-down map with movement history, and matched reference video frame. '
+                'All actions apply to the current first-person camera or its rendered point cloud. '
+                "Interpret directional keys from that camera's perspective, not the top-down "
+                'image axes or the reference video frame. '
+                'w: move forward; s: move backward; a: strafe left; d: strafe right; '
+                "q: move down; e: move up; j: turn toward the camera's own left; l: turn toward its own right; "
+                'i: tilt the view up; k: tilt the view down; '
+                '+: increase rendered point radius; -: decrease rendered point radius. '
+                "Horizontal movement is relative to the current first-person camera's horizontal heading, "
+                'so movement directions change after turning. Horizontal movement preserves height, regardless of pitch. '
+                "q/e move along the scene's vertical axis, independently of camera pitch."
             ),
             parameters={
                 'type': 'object',
                 'properties': {
-                    'key': {'type': 'string', 'enum': list('wasdqeijkl+-')},
+                    'key': {
+                        'type': 'string', 'enum': list('wasdqejlik+-'),
+                        'description': 'One camera key. Pass magnitude separately; do not pass a key sequence or a combined command such as w0.3.',
+                    },
                     'magnitude': {
                         'type': 'number', 'exclusiveMinimum': 0,
                         'description': (
-                            'Optional positive distance for w/s/a/d in scene units '
+                            'Optional positive finite distance for w/s/a/d in scene units '
                             '(approximately meters with metric scaling), or angle in degrees '
-                            'for i/j/k/l. Omit to use the configured step. q/e/+/- use fixed '
+                            'for j/l/i/k. Omit to use the configured step. '
+                            'q/e and +/- use fixed '
                             'steps and do not accept a magnitude.'
                         ),
                     },
@@ -92,11 +88,12 @@ def create_tools(camera) -> list[Tool]:
                 'required': ['key'],
                 'additionalProperties': False,
             },
-            function=action,
+            function=camera_action,
         ),
         Tool(
             name='camera_observe',
-            description='Render the current camera pose and return its state and three separate view images.',
+            description=('Render the current camera pose and return its state and three separate images: '
+                         'first-person view, top-down map with movement history, and matched reference video frame.'),
             parameters=no_arguments,
             function=lambda: _observation(camera.observe()),
         ),
@@ -108,7 +105,8 @@ def create_tools(camera) -> list[Tool]:
         ),
         Tool(
             name='camera_reset',
-            description='Restore the initial camera pose and point radius; return state and three separate view images.',
+            description=('Restore the initial camera pose and point radius; return state and three separate images. '
+                         'Retain old trajectories and start a disconnected path segment at the initial position.'),
             parameters=no_arguments,
             function=lambda: _observation(camera.reset()),
         ),

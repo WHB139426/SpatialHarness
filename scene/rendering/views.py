@@ -107,10 +107,15 @@ class OverheadView:
                    (.66, .57, -.001), (-.66, .57, -.001)],
                   [(0, 1, 2, 3)], dark, label)
         self.marker.hide_render = True
+        self.trajectory = _mesh('Camera trajectory', [], [],
+                                emission_material('Trajectory magenta', (1, .12, .65)), camera)
+        self.trajectory.data.materials.append(emission_material('Trajectory start yellow', (1, .85, .04)))
+        self.trajectory.location.z = -.06
+        self.trajectory.hide_render = True
 
-    def update(self, position, forward):
+    def update(self, position, forward, history=()):
         """Frame the whole cloud and project the first-person pose onto its map."""
-        points = list(self.corners) + [position]
+        points = list(self.corners) + [position] + [Vector(p) for p in history]
         horizontal = [(p - self.center).dot(self.right) for p in points]
         vertical = [(p - self.center).dot(self.screen_up) for p in points]
         x_mid = (min(horizontal) + max(horizontal)) / 2
@@ -133,6 +138,48 @@ class OverheadView:
         self.marker.rotation_euler.z = math.atan2(-heading_x, heading_y)
         for label in self.marker_labels:
             label.rotation_euler.z = -self.marker.rotation_euler.z
+
+    def draw_trajectory(self, segments):
+        """Project each path segment onto the map; never connect across resets."""
+        scale = self.camera.data.ortho_scale
+        width = scale * max(.002, 1.8 / self.scene.render.resolution_x)
+        radius = scale * max(.006, 3.5 / self.scene.render.resolution_x)
+        vertices, faces, starts = [], [], []
+        for segment in segments:
+            points = []
+            for position in segment:
+                delta = Vector(position) - self.camera.location
+                points.append(Vector((delta.dot(self.right), delta.dot(self.screen_up), 0)))
+            for start, end in zip(points, points[1:]):
+                delta = end - start
+                if delta.length < 1e-8:
+                    continue  # Vertical movement has no horizontal extent.
+                direction = delta.normalized()
+                normal = Vector((-direction.y, direction.x, 0))
+                side = normal * width / 2
+                index = len(vertices)
+                vertices.extend((start - side, start + side, end + side, end - side))
+                faces.append((index, index + 1, index + 2, index + 3))
+                size = min(width * 5, delta.length * .5)
+                middle = (start + end) / 2
+                index = len(vertices)
+                vertices.extend((middle + direction * size / 2,
+                                 middle - direction * size / 2 + normal * size * .45,
+                                 middle - direction * size / 2 - normal * size * .45))
+                faces.append((index, index + 1, index + 2))
+            index = len(vertices)
+            vertices.extend(points[0] + Vector((radius * math.cos(i * math.tau / 24),
+                                               radius * math.sin(i * math.tau / 24), .001))
+                            for i in range(24))
+            starts.append(len(faces))
+            faces.append(tuple(range(index, index + 24)))
+        mesh = self.trajectory.data
+        mesh.clear_geometry()
+        mesh.from_pydata(vertices, [], faces)
+        mesh.update()
+        for index in starts:
+            mesh.polygons[index].material_index = 1
+        self.trajectory.hide_render = False
 
 
 def create_crosshair(camera, scene):

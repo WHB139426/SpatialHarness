@@ -47,7 +47,7 @@ Point radius changes by {POINT_STEP:g} scene units per +/- key.
 Edit MOVE_STEP, LOOK_STEP, or POINT_STEP at the top of main_env.py to change these fixed amounts.
 Positive magnitudes can follow each WASD/IJKL key: w0.5a0.2j30.
 Keys run left to right: wwww moves four default steps; waij still works.
-Each key saves a three-panel PNG preview, separate first-person and top-down PNGs, and a JSON record.
+Each key saves a three-panel PNG preview, separate first-person and top-down-with-trajectory PNGs, and a JSON record.
 '''
 
 
