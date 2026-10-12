@@ -21,10 +21,12 @@ class CameraSession:
         self.planning = {'target': None, 'look_at': None, 'route': []}
         self._undo_state = None
 
-    def _commit(self, candidate, command, *, reset=False, planning=None):
+    def _commit(self, candidate, command, *, reset=False, planning=None, fresh=False):
         planning = self.planning if planning is None else planning
         paths = copy.deepcopy(self.path_segments)
-        if reset:
+        if fresh:
+            paths = [[candidate['position'][:]]]
+        elif reset:
             paths.append([candidate['position'][:]])
         elif candidate['position'] != self.state['position']:
             paths[-1].append(candidate['position'][:])
@@ -78,10 +80,18 @@ class CameraSession:
     def observe(self, command='observe'):
         return self._commit(self.state, command)
 
-    def reset(self):
-        record = self._commit(self.navigator.initial.copy(), 'reset', reset=True)
+    def reset(self, *, fresh=False):
+        """Restore the initial pose; fresh also clears movement history and planning."""
+        planning = {'target': None, 'look_at': None, 'route': []} if fresh else None
+        record = self._commit(self.navigator.initial.copy(), 'new' if fresh else 'reset',
+                              reset=True, planning=planning, fresh=fresh)
         self._undo_state = None
         return record
+
+    def start_session(self, output):
+        """Start a clean exploration in a new output directory using the loaded scene."""
+        with self.renderer.new_session(output):
+            return self.reset(fresh=True)
 
     def execute(self, key, magnitude=None, label=None):
         if key == 'undo':

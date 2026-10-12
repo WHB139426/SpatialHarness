@@ -481,3 +481,38 @@ AST、纯英文、无工具名称/格式占位符的通用 system prompt、米�
 ## 38. 路线规划沿空地避开障碍
 
 用户要求 camera_set_route 提醒模型走空地，避免穿模和撞墙。`agent/tools.py` 的英文 description 增加每段路线沿可见空地和通道规划、与墙体/隔断/家具/设施保持间距的说明；点云缺口不代表可通行，不确定时检查当前第一视角。仅修改工具说明，仍不提供碰撞检测或自动执行路线。语法和 diff 检查通过，未运行模型或 Blender。
+
+
+## 39. 恢复 agent WASD 与四方向标记
+
+用户要求将 a/s/d 加回 agent，并恢复俯视图四个移动方向。`agent/tools.py` 的 camera_action 允许 w/a/s/d/j/l/i/k 和 undo；英文 description、距离参数、默认步长及错误说明同步，删除横向移动必须先转向再 w 的旧说明。所有移动仍相对于当前第一视角的水平朝向，保持高度和朝向。环境导航原本支持 WASD，无需修改底层动作。`scene/rendering/views.py` 保留醒目的青色圆点和长 w 箭头，添加短白色 a/s/d 臂和字母，恢复三短一长十字；保留白边/深色轮廓、最前层、绿色 j/l 弧线和六字母正立。观察英文图例和 README 同步，通用 system prompt、地图坐标格式和模型配置不变。
+
+复用已有重建完成真实 Blender 三栏及重叠预览，960/480、yaw 0/45/90/180、pitch 0/60 的四方向标记与实际移动方向/距离一致，移动保持高度与朝向，六字母正立、标记层级/裁剪/第一视角隐藏及 action schema 检查通过。报告为 `outputs/camera_marker_check_votzhj9l/report.json`，预览为 `0001_distinct_current_camera.png`；临时脚本 `/tmp/spatialharness-wasd-marker-check.py`。语法与 diff 检查通过，未调用模型导航或 GPU 重建；重启 main_agent.py 后生效。
+
+
+## 40. 撤回 agent ASD 与四方向标记
+
+用户再次要求删除 a/s/d，覆盖上一节。camera_action 恢复只允许 w/j/l/i/k 和 undo，英文动作说明、距离参数、默认步长和观察图例同步恢复。俯视图删除三个短臂及 a/s/d 字母，保留醒目的青色圆点、带轮廓的单 w 箭头、最前层和绿色 j/l 弧线。README 同步；手动环境底层动作沿用原有实现。语法、工具 schema 和 diff 检查通过，本轮未重跑 Blender 或模型；重启 main_agent.py 后生效。
+
+
+## 41. /new 复用环境开始新对话
+
+用户要求 main_agent.py 支持 /new，跳过重复重建并清空聊天记录。交互循环识别大小写不敏感的 /new，先将当前 conversation.json 归档为 conversation_<时间戳>.json，再调用已有 Agent.reset() 清空消息并保留 system prompt；新对话继续写入 conversation.json。同一个 backend、Blender worker 和重建结果继续使用，相机位姿、轨迹、目标/路线标记与撤销记录保留。启动帮助和 README 同步。没有修改 agent 核心或环境代码。
+
+用脚本模型、模拟重建进程和相机 worker 验证完整入口交互：多轮问答中的工具消息及推理在 /new 后不进入下一次模型请求，两次 /new 各保留旧日志，最新 conversation.json 只含新对话，/new 不发送给模型，重建/backend/worker 各只启动一次并在 /exit 时正常释放。临时材料在 /tmp/spatialharness-new-chat-owteoykz。语法和 diff 检查通过，未调用真实模型、Blender 或 GPU 重建。
+
+
+## 42. /new 同时重置全部探索状态
+
+用户澄清 /new 要连相机和历史轨迹等全部重置，覆盖上一节的环境保留行为。CameraClient 和 CameraSession 的 reset 增加关键字 fresh=False；/new 先调用 camera.reset(fresh=True)，恢复初始位置、yaw、pitch、点半径，轨迹只保留初始点，并清空 target/look_at/route 和 undo。环境重置成功后才归档旧聊天并清空模型消息，保留 system prompt。复用重建、Blender worker 和模型客户端；旧观察文件保留，编号递增避免覆盖。常规 camera_reset/reset() 仍保留旧轨迹和规划标记。fresh 重置沿用提交与失败回滚，失败时保留原位姿、轨迹、计划和 undo。README 同步。
+
+用合成点云 fixture、真实 Blender 子进程和脚本模型验证 main_agent.py 完整交互：移动/转向/俯仰/点半径改变和目标/路线设置后，两次 /new 全量恢复；轨迹为一个起点、规划为空、undo 不可用；首次新模型请求只含 system 和新任务，旧聊天分别归档，重建/worker/backend 各只启动一次。常规 reset 保留轨迹与规划，注入失败的 fresh reset 保留状态文件及 undo 并可重试，worker 正常退出。重置后第一视角与俯视图像素均与最初观察完全一致。报告为 /tmp/spatialharness-new-environment-0wbznu1d/report.json，临时脚本 /tmp/spatialharness-new-environment-check.py 和 /tmp/spatialharness-fresh-reset-inject.py。语法与 diff 检查通过，未调用真实模型服务或 GPU 重建。
+
+
+## 43. /new 新建独立 camera 目录并冻结旧目录
+
+用户进一步要求 /new 新建 outputs/camera_<时间戳>/，旧目录保持原样，不在旧目录归档聊天。本节覆盖前两节的归档方式。main_agent.py 为每次 /new 创建同一父目录下的新 camera 目录，reconstruction/ 符号链接指向本次进程最初的重建目录；调用 CameraClient.start_session(output) 后更新当前 output 与 agent.conversation_path，并清空聊天。新对话、状态、图片及日志只写入新目录；不移动、改名或覆盖旧目录的 conversation.json。仍复用同一个 Blender worker、已加载场景及模型客户端，不重复重建。
+
+CameraSession.start_session 在 Renderer.new_session 上下文中完整重置位姿、点半径、轨迹、target/look_at/route 和 undo。Renderer 同时切换输出路径、观察编号、地图投影元数据及 worker stdout/stderr，确保后续渲染和 Blender 退出日志不写回旧目录；新编号从 1 开始。切换或初始渲染失败时恢复原输出路径、编号、地图元数据、日志描述符及相机状态，客户端日志路径也恢复。模型工具仍为原有六个，未暴露新通用工具。README 同步。
+
+使用合成重建 fixture、真实 Blender 和脚本模型检查完整入口：两次 /new 各创建独立 camera 目录，新的 conversation.json 仅含新任务，初始观察编号为 1，全部环境状态清空；原始重建通过符号链接复用，重建/worker/backend 各只初始化一次。切换前快照核对旧目录全部文件内容、文件和目录修改时间，在后续动作和 /exit 后完全不变；没有生成归档文件。注入失败的切换保持旧目录、状态/轨迹/计划/undo，后续切换可重试；新第一视角与俯视图像素与最初观察一致。报告为 /tmp/spatialharness-new-directory-dtijofjt/report.json，脚本 /tmp/spatialharness-new-directory-check.py。语法与 diff 检查通过，未调用真实模型服务或 GPU 重建。

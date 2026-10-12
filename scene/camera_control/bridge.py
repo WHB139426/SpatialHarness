@@ -72,8 +72,17 @@ class CameraClient:
     def status(self):
         return self._request('status')
 
-    def reset(self):
-        return self._request('reset')
+    def reset(self, *, fresh=False):
+        return self._request('reset', fresh=fresh)
+
+    def start_session(self, output):
+        previous_log = self.log_path
+        self.log_path = Path(output) / 'render.log'
+        try:
+            return self._request('start_session', output=str(output))
+        except Exception:
+            self.log_path = previous_log
+            raise
 
     def set_target(self, observation_id, point, look_at=None):
         return self._request('set_target', observation_id=observation_id, point=point, look_at=look_at)
@@ -120,6 +129,7 @@ def serve_camera(session, response_fd):
         'execute': session.execute,
         'status': session.status,
         'reset': session.reset,
+        'start_session': session.start_session,
         'set_target': session.set_target,
         'set_route': session.set_route,
         'close': lambda: None,

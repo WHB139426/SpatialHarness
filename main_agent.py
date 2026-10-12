@@ -31,20 +31,20 @@ Requires `transformers>=5.8.0`. Uses the native 262,144-token context window
 without RoPE scaling overrides.
 
 ```bash
-CUDA_VISIBLE_DEVICES=2,3 \
+CUDA_VISIBLE_DEVICES=2 \
 VLLM_ENGINE_READY_TIMEOUT_S=3600 \
 vllm serve /data4/haibo/weights/Qwen3.8-27B-FP8 \
   --served-model-name qwen3.8-27b \
   --host 127.0.0.1 \
   --port 8000 \
-  --tensor-parallel-size 2 \
+  --tensor-parallel-size 1 \
   --max-model-len 262144 \
   --kv-cache-dtype fp8 \
   --reasoning-parser qwen3 \
   --mm-encoder-tp-mode data \
   --max-num-seqs 16 \
   --max-num-batched-tokens 8192 \
-  --gpu-memory-utilization 0.95 \
+  --gpu-memory-utilization 0.6 \
   --enable-prefix-caching \
   --enable-prompt-tokens-details \
   --no-enable-flashinfer-autotune \
@@ -64,19 +64,21 @@ from agent.tools import create_tools
 from scene.camera_control.bridge import CameraClient
 
 
-MODEL = 'qwen3.8-flash-next' # 'qwen3.8-flash-next'  'qwen3.8-27b'
+MODEL = 'qwen3.8-27b' # 'qwen3.8-flash-next'  'qwen3.8-27b'
 BASE_URL = 'http://127.0.0.1:8000/v1'
-MAX_TOKENS = 8*1024
+MAX_TOKENS = 16*1024
 TEMPERATURE = 1
 TOP_P = 0.95
 TOP_K = 20
 ENABLE_THINKING = True
-REASONING_EFFORT = 'medium' # "low", "medium", "xhigh"
+REASONING_EFFORT = 'xhigh' # "low", "medium", "xhigh"
 PRESERVE_THINKING = True
 MAX_STEPS = 100
 MAX_CONVERSATION_IMAGES = 2*3  # Keep 4 complete three-image observations.
 
 # 你现在走到卫生间的位置，走到后把第一视角对着马桶。先规划，再移动
+# 围绕着床的边沿转一圈，告诉我床的四条边的大小。先规划，再移动
+
 
 SYSTEM_PROMPT = '''Role
 You are a spatial agent exploring a reconstructed 3D point-cloud scene.
@@ -163,7 +165,7 @@ def main():
                 max_steps=MAX_STEPS, max_conversation_images=MAX_CONVERSATION_IMAGES,
                 conversation_path=output / 'conversation.json',
             )
-            print(f'Agent model: {MODEL}\nSession: {output}\nAsk a question; /exit to quit.', flush=True)
+            print(f'Agent model: {MODEL}\nSession: {output}\nAsk a question; /new to start a new conversation; /exit to quit.', flush=True)
             while True:
                 try:
                     prompt = input('agent> ').strip()
@@ -172,6 +174,15 @@ def main():
                     break
                 if prompt.lower() in ('/exit', 'quit', 'exit'):
                     break
+                if prompt.lower() == '/new':
+                    next_output = environment.create_session_dir(output.parent)
+                    (next_output / 'reconstruction').symlink_to(folder, target_is_directory=True)
+                    camera.start_session(next_output)
+                    output = next_output
+                    agent.conversation_path = output / 'conversation.json'
+                    agent.reset()
+                    print(f'New conversation started with the camera environment reset. Session: {output}', flush=True)
+                    continue
                 if prompt:
                     print('Agent:', agent.run(prompt), flush=True)
     finally:

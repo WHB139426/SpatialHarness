@@ -30,7 +30,7 @@ assets/                  # 字体与标签图片
 
 修改动作解析或移动方式看 `scene/camera_control/`，修改图片显示看 `scene/rendering/`，修改抽帧和重建看 `scene/reconstruction/`。调用关系为 `main_env.py` → `CameraSession` → `SceneRenderer`：相机会话执行动作并维护状态，渲染器根据当前位姿生成观察结果，终端交互调用会话方法。重建结果通过 PLY、相机 JSON 和抽帧文件传给查看器。
 
-`CameraSession` 提供 `observe()`、`execute(key, magnitude=None)`、`status()`、`reset()`、`set_target(observation_id, point, look_at=None)` 和 `set_route(observation_id, points)`。除状态查询外均返回三图观察记录。全部图片和记录成功保存后才提交相机状态、移动历史和计划标记；失败时保留之前的状态。
+`CameraSession` 提供 `observe()`、`execute(key, magnitude=None)`、`status()`、`reset(fresh=False)`、`start_session(output)`、`set_target(observation_id, point, look_at=None)` 和 `set_route(observation_id, points)`。除状态查询外均返回三图观察记录。全部图片和记录成功保存后才提交相机状态、移动历史和计划标记；失败时保留之前的状态。`reset(fresh=True)` 恢复初始相机状态，同时清空历史轨迹、目标、路线和撤销记录；`start_session(output)` 在新目录执行完整重置，并从 1 开始记录观察。
 
 环境默认配置在 `main_env.py` 顶部，agent 默认配置在 `main_agent.py` 顶部。初始相机位姿由场景初始化计算，并作为位置和方向传给 `CameraSession`；会话负责动作和状态，不计算地面或眼高。
 
@@ -101,7 +101,7 @@ backend 负责服务接口，protocol 负责模型消息与输出格式。以后
 PYTHONDONTWRITEBYTECODE=1 /home/hw139426/workspace/miniconda3/envs/spatial_agent/bin/python main_agent.py
 ```
 
-入口先在子进程中从视频重建，成功后释放重建进程，再启动 Blender worker 和 agent。在 `agent>` 后输入空间问题，例如“床在当前朝向的哪一侧？请转头确认”。模型按需观察和移动；每步观察自动回传图片。同一个 agent 和 worker 连续处理提问，输入 `/exit`、`quit`、`exit` 或终端 EOF 可退出；会话关闭时释放 Blender 和模型客户端。
+入口先在子进程中从视频重建，成功后释放重建进程，再启动 Blender worker 和 agent。在 `agent>` 后输入空间问题，例如“床在当前朝向的哪一侧？请转头确认”。模型按需观察和移动；每步观察自动回传图片。同一个 agent 和 worker 连续处理提问。输入 `/new` 新建同一输出父目录下的 `camera_<时间戳>/`，开始全新的对话和探索：相机位置、朝向、点半径恢复初始值，清空历史轨迹、target、look_at、route、撤销记录和聊天上下文，保留 system prompt，复用当前重建与 Blender worker。新目录的 `reconstruction/` 是指向最初重建目录的符号链接，新聊天、状态、图片及日志全部写入新目录，观察编号从 1 开始。旧目录及其 `conversation.json` 保持原样，后续不再写入旧目录。输入 `/exit`、`quit`、`exit` 或终端 EOF 可退出；会话关闭时释放 Blender 和模型客户端。
 
 模型当前使用用户选定的 `qwen3.8-flash-next`、`http://127.0.0.1:8000/v1`，生成上限 8192 tokens，最多 100 次模型调用/提问，图片预算为 12 张，可保留最近四组完整的三图观察。模型参数、thinking 设置、服务超时和 system prompt 直接在 `main_agent.py` 顶部修改。环境参数复用 `main_env.py` 的解析器，例如：
 
@@ -118,7 +118,7 @@ python main_agent.py --help
 
 `scene.camera_control.bridge.CameraClient` 可以在普通 Python 中启动并控制持续运行的 Blender worker，不需要导入 `bpy`。它接收完整的 worker 启动命令、日志路径和超时时间；场景初始化完成后，`initial_state` 保存初始状态，此时尚未渲染。
 
-客户端提供 `observe()`、`execute(key, magnitude=None)`、`status()`、`reset()`、`set_target(observation_id, point, look_at=None)`、`set_route(observation_id, points)` 和 `close()`。除 close 外对应 `CameraSession` 方法；状态查询不渲染，其他方法返回三图观察。使用 `with` 会在结束时关闭子进程。相机动作仍是一项按键动作，例如 `execute('w', 0.5)`，不接收组合命令字符串。
+客户端提供 `observe()`、`execute(key, magnitude=None)`、`status()`、`reset(fresh=False)`、`start_session(output)`、`set_target(observation_id, point, look_at=None)`、`set_route(observation_id, points)` 和 `close()`。除 close 外对应 `CameraSession` 方法；状态查询不渲染，其他方法返回三图观察。使用 `with` 会在结束时关闭子进程。相机动作仍是一项按键动作，例如 `execute('w', 0.5)`，不接收组合命令字符串。
 
 Blender worker 仍运行 `main_env.py`。客户端自动追加隐藏参数 `--response-fd`，让内部 `--worker` 分支进入 JSON 循环；请求通过标准输入发送，响应走独立的继承管道，Blender 标准输出与错误输出写入日志。协议为同步串行的逐行 JSON，请求形如 `{"op": "execute", "params": {"key": "w", "magnitude": 0.5}}`；响应包含 `ok`，成功时有 `result`，失败时有 `error`。动作错误可继续请求；通信超时或管道断开会关闭 worker，避免错配后续响应。超时默认配置 `CAMERA_TIMEOUT = 300` 放在 `main_env.py` 顶部，由调用方传入客户端。
 

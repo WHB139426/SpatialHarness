@@ -71,6 +71,33 @@ class SceneRenderer:
         self.crosshair = create_crosshair(self.camera, self.scene)
         self.overhead_label = ViewLabel(self.overhead.camera, self.scene, 'TOP DOWN')
 
+    @contextlib.contextmanager
+    def new_session(self, output):
+        """Switch files and worker logs to a fresh session; restore them on failure."""
+        previous = self.output, self.log_path, self.index, self.map_frame
+        sys.stdout.flush()
+        sys.stderr.flush()
+        saved = [os.dup(1), os.dup(2)]
+        try:
+            self.output = Path(output)
+            self.log_path = self.output / 'render.log'
+            self.index = 0
+            self.map_frame = None
+            with self.log_path.open('a') as log:
+                os.dup2(log.fileno(), 1)
+                os.dup2(log.fileno(), 2)
+            yield
+        except BaseException:
+            self.output, self.log_path, self.index, self.map_frame = previous
+            sys.stdout.flush()
+            sys.stderr.flush()
+            for descriptor, backup in zip((1, 2), saved):
+                os.dup2(backup, descriptor)
+            raise
+        finally:
+            for backup in saved:
+                os.close(backup)
+
     @staticmethod
     def _show(root, visible):
         for obj in (root, *root.children_recursive):

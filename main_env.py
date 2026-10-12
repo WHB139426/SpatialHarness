@@ -13,7 +13,7 @@ sys.path.insert(0, str(ROOT))
 
 from scene.reconstruction.reconstruct import create_session_dir, reconstruct
 
-DEVICE = 'cuda:1'
+DEVICE = 'cuda:2'
 BLENDER = '/data4/haibo/software/blender/blender-4.5.13-linux-x64/blender'
 VIDEO = '/data4/haibo/data/VSI-Bench/scannet/scene0246_00.mp4'
 REC_WEIGHTS = '/data4/haibo/weights/VGGT-Omega/vggt_omega_1b_512.pt'
